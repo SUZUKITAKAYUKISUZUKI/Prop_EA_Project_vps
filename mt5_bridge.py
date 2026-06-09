@@ -230,6 +230,7 @@ async def trade_signal(request: TradeSignalRequest) -> TradeSignalResponse:
     except KeyError as exc:
         raise HTTPException(status_code=422, detail=f"Missing field: {exc}") from exc
     except Exception as exc:
+        logger.exception("POST /trade_signal failed: %s", exc)
         raise HTTPException(status_code=500, detail=str(exc)) from exc
     return TradeSignalResponse(**result)
 
