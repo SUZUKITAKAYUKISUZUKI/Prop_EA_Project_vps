@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING
 import numpy as np
 
 if TYPE_CHECKING:
-    from strategies.cspa import ImpulseLeg, MomentumSignal, StagnationCluster
+    from strategies.archive.cspa import ImpulseLeg, MomentumSignal, StagnationCluster
 
 _NUMBA_OK = False
 try:
@@ -160,7 +160,7 @@ def phase_from_numba(code: int) -> str:
 
 
 def impulse_from_numba_tuple(result) -> ImpulseLeg | None:
-    from strategies.cspa import ImpulseLeg
+    from strategies.archive.cspa import ImpulseLeg
 
     found, is_up, start_idx, end_idx, start_price, end_price, size = result
     if not found:
@@ -623,7 +623,7 @@ def detect_sweep_engulfing_numba(
 
 
 def stagnation_from_numba_tuple(result) -> StagnationCluster | None:
-    from strategies.cspa import StagnationCluster
+    from strategies.archive.cspa import StagnationCluster
 
     start, end, count, avg_body, zone_high, zone_low, solid = result
     if int(start) < 0:
@@ -650,8 +650,8 @@ def momentum_from_numba_tuple(
     bar_index: int,
     result,
 ) -> MomentumSignal:
-    from strategies.cspa import MomentumSignal
-    from strategies.cspa_scan_hot import _empty_momentum, _ts_at
+    from strategies.archive.cspa import MomentumSignal
+    from strategies.archive.cspa_scan_hot import _empty_momentum, _ts_at
 
     detected, type_code, entry, high, low, body_atr, atr_v = result
     if not detected:

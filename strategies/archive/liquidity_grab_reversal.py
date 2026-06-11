@@ -1,6 +1,9 @@
 """
 Liquidity Grab Reversal (LGR) — 流動性奪取 → 失敗 → 急速反転。
 
+ARCHIVED (2026-06-10): プロップファーム向きではない（自己資金口座用 EA としては非常に優秀）。
+参照・再分析は strategies/archive/ および archive/lgr/ から import 可。
+
 Pure Data Mode: L0-L6 停止、logs/lgr_features.csv へ特徴量収集。
 """
 
@@ -18,11 +21,11 @@ import pandas as pd
 
 from strategies.base import StrategyResult
 from strategies.base_strategy import BaseStrategy
-from strategies.cspa import classify_dow_phase_maturity, resolve_cspa_session_type
-from strategies.htf_trend_analyzer import analyze_htf_trend, clip_as_of
-from strategies.liquidity_grab_detector import GrabDetection, LiquidityGrabDetector
-from strategies.market_utils import compute_atr, pip_size_for_pair
-from strategies.reversal_feature_helpers import (
+from strategies.archive.cspa import classify_dow_phase_maturity, resolve_cspa_session_type
+from strategies.htf_trend_analyzer import analyze_htf_trend, clip_as_of, is_counter_trend
+from strategies.archive.liquidity_grab_detector import GrabDetection, LiquidityGrabDetector
+from strategies.market_utils import calc_smt_features, compute_atr, pip_size_for_pair
+from strategies.archive.reversal_feature_helpers import (
     adr_used_fraction as _adr_used_fraction,
     compute_adr_remaining as _compute_adr_remaining,
     compute_recovery_close_ratio,
@@ -52,6 +55,7 @@ LGR_MAX_HOLDING_HOURS = int(os.getenv("LGR_MAX_HOLDING_HOURS", "48"))
 MAX_HOLDING_BARS = max(4, (LGR_MAX_HOLDING_HOURS * 60) // LGR_EXEC_BAR_MINUTES)
 MAX_SETUPS_PER_DAY = int(os.getenv("LGR_MAX_SETUPS_PER_DAY", "0"))
 LGR_PRODUCTION_MAX_SETUPS_PER_DAY = 1
+LGR_TRUST_SCORE = 100.0
 VOLATILITY_LOOKBACK = int(os.getenv("LGR_VOLATILITY_LOOKBACK", "120"))
 ADR_LOOKBACK_DAYS = int(os.getenv("LGR_ADR_LOOKBACK_DAYS", "14"))
 VOLUME_LOOKBACK = int(os.getenv("LGR_VOLUME_LOOKBACK", "20"))
@@ -105,6 +109,66 @@ LGR_FEATURE_COLUMNS: tuple[str, ...] = (
 def is_lgr_pure_data_mode() -> bool:
     """特徴量収集用: L0-L6 防御・Bayes・L4 を無効化する Pure BT。"""
     return os.getenv("LGR_PURE_DATA_MODE", "0").strip().lower() in ("1", "true", "yes", "on")
+
+
+def _env_flag(name: str) -> bool:
+    return os.getenv(name, "0").strip().lower() in ("1", "true", "yes", "on")
+
+
+def is_lgr_bayes_only_bt_mode() -> bool:
+    """L0-L6/L4 off、LGR 専用 Bayes Gate V1 on の BT。"""
+    if is_lgr_defense_bt_mode() or is_lgr_ev_sizing_mode():
+        return False
+    return _env_flag("LGR_BAYES_ONLY_BT") or _env_flag("LGR_BAYES_GATE_ENABLED")
+
+
+def is_lgr_ev_sizing_mode() -> bool:
+    """Pattern C EV position sizing（拒否なし。pure 単独または L0+EV 基本設定）。"""
+    return _env_flag("LGR_EV_SIZING")
+
+
+def is_lgr_defense_bt_mode() -> bool:
+    """LGR defense BT フラグ（単独=7層フル、EV 併用= L0+EV 基本設定）。"""
+    return _env_flag("LGR_DEFENSE_BT")
+
+
+def is_lgr_l0_ev_baseline_mode() -> bool:
+    """LGR 基本設定: L0 + EV Pattern C + 3安全装置 ON。L1-L4 / Bayes / Gemini OFF。"""
+    return is_lgr_defense_bt_mode() and is_lgr_ev_sizing_mode()
+
+
+def is_lgr_bayes_gate_mode() -> bool:
+    """LGR 専用 Bayes Gate V1 が有効（bayes-only または defense BT、EV 置換時は off）。"""
+    if is_lgr_ev_sizing_mode():
+        return False
+    return is_lgr_bayes_only_bt_mode() or (
+        is_lgr_defense_bt_mode() and _env_flag("LGR_BAYES_GATE_ENABLED")
+    )
+
+
+def is_lgr_l4_bypass() -> bool:
+    """LGR L4 Gemini バイパス（0=本番 Gemini）。"""
+    if is_lgr_l0_ev_baseline_mode():
+        return True
+    if is_lgr_defense_bt_mode():
+        return False
+    if is_lgr_pure_data_mode() or is_lgr_bayes_only_bt_mode():
+        return True
+    if is_lgr_ev_sizing_mode() and not is_lgr_defense_bt_mode():
+        return True
+    return _env_flag("LGR_L4_BYPASS") if os.getenv("LGR_L4_BYPASS") is not None else True
+
+
+def is_lgr_production_pipeline() -> bool:
+    """7層フルパイプライン（L3.5 LGR Bayes + L4 Gemini）。L0+EV 基本設定は対象外。"""
+    return is_lgr_defense_bt_mode() and not is_lgr_l4_bypass()
+
+
+def is_lgr_defense_pure_mode() -> bool:
+    """LGR で main_platform の L0-L6 防御をスキップするか（pure / bayes-only / ev-only）。"""
+    if is_lgr_defense_bt_mode():
+        return False
+    return is_lgr_pure_data_mode() or is_lgr_bayes_only_bt_mode() or is_lgr_ev_sizing_mode()
 
 
 def direction_to_log_label(direction: TradeDirection) -> LogDirection:
@@ -378,7 +442,7 @@ def compute_lgr_score(
 
 
 def _resolve_dow_phase(h1_work: pd.DataFrame, timestamp: pd.Timestamp, direction: TradeDirection) -> DowPhaseLabel:
-    from strategies.cspa import TrendPhase
+    from strategies.archive.cspa import TrendPhase
 
     htf = analyze_htf_trend(h1_work, timestamp)
     if htf.direction == "NEUTRAL":
@@ -534,6 +598,62 @@ def detect_lgr_setups_for_pair(
     if pair.upper() not in ALLOWED_PAIRS:
         return []
 
+    from strategies.archive.lgr_scan_hot import detect_lgr_setups_from_frames, lgr_scan_numpy_enabled
+
+    if lgr_scan_numpy_enabled():
+        return detect_lgr_setups_from_frames(
+            df,
+            pair,
+            m15_df=m15_df,
+            h1_df=h1_df,
+            lookback_bars=lookback_bars,
+            max_setups_per_day=max_setups_per_day,
+            atr_period=ATR_PERIOD,
+            structure_lookback=STRUCTURE_LOOKBACK,
+            stagnation_lookback=STAGNATION_LOOKBACK,
+            volume_lookback=VOLUME_LOOKBACK,
+            volatility_lookback=VOLATILITY_LOOKBACK,
+            sl_buffer_atr=SL_BUFFER_ATR,
+            min_rr=MIN_RR,
+            spread_pips=LGR_BT_SPREAD_PIPS,
+            progress_hook=progress_hook,
+            resume_from_bar=resume_from_bar,
+            initial_setups=initial_setups,
+            on_checkpoint=on_checkpoint,
+            checkpoint_every=checkpoint_every,
+        )
+
+    return _detect_lgr_setups_for_pair_pandas(
+        df,
+        pair,
+        m15_df=m15_df,
+        h1_df=h1_df,
+        lookback_bars=lookback_bars,
+        max_setups_per_day=max_setups_per_day,
+        progress_hook=progress_hook,
+        resume_from_bar=resume_from_bar,
+        initial_setups=initial_setups,
+        on_checkpoint=on_checkpoint,
+        checkpoint_every=checkpoint_every,
+    )
+
+
+def _detect_lgr_setups_for_pair_pandas(
+    df: pd.DataFrame,
+    pair: str,
+    *,
+    m15_df: pd.DataFrame | None = None,
+    h1_df: pd.DataFrame | None = None,
+    lookback_bars: int = LOOKBACK_BARS,
+    max_setups_per_day: int = MAX_SETUPS_PER_DAY,
+    progress_hook: Callable[[int], None] | None = None,
+    resume_from_bar: int | None = None,
+    initial_setups: list[LgrSetup] | None = None,
+    on_checkpoint: Callable[[int, list[LgrSetup], dict[str, Any] | None], None] | None = None,
+    checkpoint_every: int = 0,
+) -> list[LgrSetup]:
+    """Legacy pandas scan — ``LGR_SCAN_NUMPY=0`` のみ。"""
+
     exec_work = _prepare_df(m15_df if m15_df is not None else df)
     h1_work = _prepare_df(h1_df if h1_df is not None else df)
     if len(exec_work) < ATR_PERIOD + 5:
@@ -614,9 +734,15 @@ def build_lgr_feature_log_row(
     setup: LgrSetup,
     trade_result: str,
     profit_r: float,
+    bayes_probability: float | None = None,
+    bayes_regime: str = "",
+    bayes_reason: str = "",
+    shadow_result: str = "NONE",
+    shadow_profit_r: float = 0.0,
+    shadow_trade_result: str = "NONE",
 ) -> dict[str, Any]:
     feat = setup.lgr_features.as_dict()
-    return {
+    row = {
         "trade_id": trade_id,
         "timestamp": setup.timestamp.strftime("%Y-%m-%d %H:%M:%S"),
         "pair": setup.pair,
@@ -624,7 +750,14 @@ def build_lgr_feature_log_row(
         "trade_result": trade_result,
         "profit_r": round(float(profit_r), 4),
         **{k: feat.get(k, "") for k in LGR_FEATURE_COLUMNS},
+        "bayes_probability": "" if bayes_probability is None else round(float(bayes_probability), 4),
+        "bayes_regime": bayes_regime,
+        "bayes_reason": bayes_reason,
+        "shadow_result": shadow_result,
+        "shadow_profit_r": round(float(shadow_profit_r), 4),
+        "shadow_trade_result": shadow_trade_result,
     }
+    return row
 
 
 class LiquidityGrabReversalStrategy(BaseStrategy):
@@ -662,15 +795,47 @@ class LiquidityGrabReversalStrategy(BaseStrategy):
     ) -> StrategyResult:
         h1_ref = h1_gbp if setup.pair == LGR_PAIR_PRIMARY else h1_eur
         htf = analyze_htf_trend(h1_ref, setup.timestamp)
+        pip = pip_size_for_pair(setup.pair)
+        sweep_distance = setup.lgr_features.sweep_distance_pips * pip
+        atr = setup.lgr_features.current_atr_h1
+        atr_ratio = sweep_distance / atr if atr > 0 else 0.0
+
+        class _SmtProbe:
+            __slots__ = ("pair", "sweep_distance")
+
+            def __init__(self, s: LgrSetup) -> None:
+                self.pair = s.pair
+                self.sweep_distance = s.lgr_features.sweep_distance_pips * pip_size_for_pair(s.pair)
+
+        smt_feats = calc_smt_features(
+            _SmtProbe(gbp_setup) if gbp_setup is not None else None,
+            _SmtProbe(eur_setup) if eur_setup is not None else None,
+        )
+        counter = is_counter_trend(setup.direction, htf.direction)
+        defense_pure = (
+            self.is_pure_data_mode
+            or is_lgr_pure_data_mode()
+            or is_lgr_bayes_only_bt_mode()
+        )
         raw: dict[str, Any] = {
             **setup.lgr_features.as_dict(),
+            "smt_intensity": smt_feats.intensity,
+            "smt_diff": smt_feats.diff,
+            "smt_leader": smt_feats.leader,
+            "wick_ratio_pct": round(setup.lgr_features.wick_ratio * 100.0, 4),
+            "atr_ratio": round(atr_ratio, 4),
+            "has_bos": False,
+            "both_sweep": gbp_setup is not None and eur_setup is not None,
             "htf_trend_direction": htf.direction,
+            "htf_counter_trend": counter,
             "candidate_score": setup.candidate_score,
+            "reject_reason": "",
         }
-        if self.is_pure_data_mode or is_lgr_pure_data_mode():
-            decision = "ALLOW"
-        else:
-            decision = "PENDING_FILTERS"
+
+        candidate_score = setup.candidate_score if is_lgr_pure_data_mode() else LGR_TRUST_SCORE
+        raw["candidate_score"] = candidate_score
+        raw["lgr_score"] = candidate_score
+        decision = "ALLOW" if defense_pure else "PENDING_FILTERS"
         return StrategyResult(
             is_setup=True,
             setup_type=self.setup_type,
@@ -679,7 +844,7 @@ class LiquidityGrabReversalStrategy(BaseStrategy):
             entry_price=setup.entry_price,
             stop_loss=setup.stop_loss,
             take_profit=setup.take_profit,
-            candidate_score=setup.candidate_score,
+            candidate_score=candidate_score,
             raw_features=raw,
         )
 
@@ -704,5 +869,14 @@ __all__ = [
     "compute_lgr_trade_excursions",
     "detect_lgr_setups_for_pair",
     "direction_to_log_label",
+    "is_lgr_bayes_gate_mode",
+    "is_lgr_bayes_only_bt_mode",
+    "is_lgr_defense_bt_mode",
+    "is_lgr_defense_pure_mode",
+    "is_lgr_ev_sizing_mode",
+    "is_lgr_l0_ev_baseline_mode",
+    "is_lgr_l4_bypass",
+    "is_lgr_production_pipeline",
     "is_lgr_pure_data_mode",
+    "LGR_TRUST_SCORE",
 ]

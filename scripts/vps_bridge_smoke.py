@@ -27,13 +27,22 @@ def main() -> None:
     print("=== Prop EA VPS bridge smoke test ===")
     print(f"Root: {ROOT}")
 
-    required = ROOT / "strategies" / "bt_ohlcv.py"
-    if not required.is_file():
+    required = [
+        ROOT / "strategies" / "bt_ohlcv.py",
+        ROOT / "strategies" / "dinapoli.py",
+        ROOT / "src" / "filters" / "dn_prop_gate_runtime.py",
+        ROOT / "backtest_results" / "models" / "dn_bayes_ev_v2.json",
+        ROOT / "backtest_results" / "models" / "dn_prop_gate_v1.json",
+        ROOT / "storage" / "dn_feature_store.py",
+    ]
+    missing = [p for p in required if not p.is_file()]
+    if missing:
         _fail(
-            "strategies/bt_ohlcv.py is missing. "
-            "Re-sync from dev (sync_vps_min.cmd) or git pull the latest VPS repo."
+            "Missing VPS minimum files:\n  "
+            + "\n  ".join(str(p.relative_to(ROOT)) for p in missing)
+            + "\nRe-sync from dev (sync_vps_min.cmd) or git pull the latest VPS repo."
         )
-    print("[OK] strategies/bt_ohlcv.py present")
+    print("[OK] VPS minimum files present (A+C: LSFC + DiNapoli)")
 
     try:
         import pandas as pd

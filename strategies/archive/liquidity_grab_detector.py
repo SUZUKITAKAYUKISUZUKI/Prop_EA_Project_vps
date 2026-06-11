@@ -11,7 +11,7 @@ from typing import Any, Literal
 
 import pandas as pd
 
-from strategies.cspa import resolve_cspa_session_type
+from strategies.archive.cspa import resolve_cspa_session_type
 from strategies.market_utils import pip_size_for_pair
 
 LiquidityPoolType = Literal["DAILY_HIGH", "DAILY_LOW", "SESSION_HIGH", "SESSION_LOW"]
@@ -107,6 +107,23 @@ class LiquidityGrabDetector:
         atr: float,
     ) -> GrabDetection | None:
         """指定インデックスで Long/Short のうち強い方を返す。"""
+        from strategies.archive.lgr_scan_hot import (
+            build_lgr_scan_context,
+            detect_grab_at_index_np,
+            lgr_scan_numpy_enabled,
+        )
+        from strategies.bt_ohlcv import as_ohlcv
+
+        if lgr_scan_numpy_enabled():
+            arr = as_ohlcv(work)
+            ctx = build_lgr_scan_context(arr, arr, pair, atr_period=14)
+            return detect_grab_at_index_np(
+                ctx,
+                idx,
+                sl_buffer_atr=self.sl_buffer_atr,
+                min_rr=self.min_rr,
+            )
+
         pip = pip_size_for_pair(pair)
         long_grab = self.detect_long_grab(work, idx, pair, pip, atr=atr)
         short_grab = self.detect_short_grab(work, idx, pair, pip, atr=atr)

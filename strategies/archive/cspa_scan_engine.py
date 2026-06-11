@@ -13,9 +13,9 @@ import os
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from strategies.cspa import ImpulseLeg, StagnationCluster, SwingPoint, TrendPhase
-    from strategies.cspa_arrays import CspaScanArrays
-    from strategies.cspa_scan_context import CspaScanContext
+    from strategies.archive.cspa import ImpulseLeg, StagnationCluster, SwingPoint, TrendPhase
+    from strategies.archive.cspa_arrays import CspaScanArrays
+    from strategies.archive.cspa_scan_context import CspaScanContext
 
 
 def _env_flag(name: str, default: bool = False) -> bool:
@@ -36,7 +36,7 @@ def scan_numba_enabled() -> bool:
 def scan_numba_active() -> bool:
     if not scan_numba_enabled():
         return False
-    from strategies.cspa_scan_numba import numba_available
+    from strategies.archive.cspa_scan_numba import numba_available
 
     return numba_available()
 
@@ -61,10 +61,10 @@ def scan_parallel_jobs() -> int:
 
 
 def measure_retrace_ratio_fast(arrays: CspaScanArrays, impulse: ImpulseLeg, bar_index: int) -> float:
-    from strategies.cspa_arrays import measure_retrace_ratio_np
+    from strategies.archive.cspa_arrays import measure_retrace_ratio_np
 
     if scan_numba_active():
-        from strategies.cspa_scan_numba import measure_retrace_ratio_numba
+        from strategies.archive.cspa_scan_numba import measure_retrace_ratio_numba
 
         return measure_retrace_ratio_numba(
             arrays.structure.high,
@@ -79,10 +79,10 @@ def measure_retrace_ratio_fast(arrays: CspaScanArrays, impulse: ImpulseLeg, bar_
 
 
 def m1_over_retraces_structure_fast(arrays: CspaScanArrays, trigger_index: int, impulse: ImpulseLeg) -> bool:
-    from strategies.cspa_arrays import m1_over_retraces_structure_np
+    from strategies.archive.cspa_arrays import m1_over_retraces_structure_np
 
     if scan_numba_active():
-        from strategies.cspa_scan_numba import m1_over_retraces_structure_numba
+        from strategies.archive.cspa_scan_numba import m1_over_retraces_structure_numba
 
         fib_max = float(os.getenv("CSPA_FIB_RETRACE_MAX", "0.618"))
         return m1_over_retraces_structure_numba(
@@ -107,11 +107,11 @@ def detect_stagnation_cluster_fast(
     *,
     max_bars: int,
 ) -> StagnationCluster | None:
-    from strategies.cspa import STAGNATION_MAX_BARS
-    from strategies.cspa_arrays import detect_stagnation_cluster_np
+    from strategies.archive.cspa import STAGNATION_MAX_BARS
+    from strategies.archive.cspa_arrays import detect_stagnation_cluster_np
 
     if scan_numba_active():
-        from strategies.cspa_scan_numba import (
+        from strategies.archive.cspa_scan_numba import (
             detect_stagnation_cluster_numba,
             stagnation_from_numba_tuple,
         )
@@ -149,11 +149,11 @@ def correction_rhythm_ok_fast(
     low_bar_indices: list[int],
     scan_ctx: CspaScanContext | None = None,
 ) -> bool:
-    from strategies.cspa import CORRECTION_RHYTHM_MAX_RATIO
-    from strategies.cspa_scan_hot import correction_rhythm_ok_np
+    from strategies.archive.cspa import CORRECTION_RHYTHM_MAX_RATIO
+    from strategies.archive.cspa_scan_hot import correction_rhythm_ok_np
 
     if scan_numba_active() and scan_ctx is not None:
-        from strategies.cspa_scan_numba import correction_rhythm_ok_numba
+        from strategies.archive.cspa_scan_numba import correction_rhythm_ok_numba
 
         return correction_rhythm_ok_numba(
             arrays.structure.high,
@@ -192,10 +192,10 @@ def prior_correction_ratio_fast(
     low_bar_indices: list[int],
     scan_ctx: CspaScanContext | None = None,
 ) -> float | None:
-    from strategies.cspa_scan_hot import prior_correction_ratio_np
+    from strategies.archive.cspa_scan_hot import prior_correction_ratio_np
 
     if scan_numba_active() and scan_ctx is not None:
-        from strategies.cspa_scan_numba import (
+        from strategies.archive.cspa_scan_numba import (
             prior_correction_ratio_numba,
             prior_ratio_from_numba,
         )
@@ -224,11 +224,11 @@ def prior_correction_ratio_fast(
 
 
 def volatility_percentile_fast(arrays: CspaScanArrays, bias_idx: int) -> float:
-    from strategies.cspa import ATR_PERIOD, CSPA_VOLATILITY_LOOKBACK_BARS
-    from strategies.cspa_scan_hot import volatility_percentile_np
+    from strategies.archive.cspa import ATR_PERIOD, CSPA_VOLATILITY_LOOKBACK_BARS
+    from strategies.archive.cspa_scan_hot import volatility_percentile_np
 
     if scan_numba_active():
-        from strategies.cspa_scan_numba import volatility_percentile_numba
+        from strategies.archive.cspa_scan_numba import volatility_percentile_numba
 
         return volatility_percentile_numba(
             arrays.bias_atr,
@@ -251,16 +251,16 @@ def build_pullback_rhythm_fast(
     struct_idx: int,
     retrace_ratio: float,
 ):
-    from strategies.cspa import (
+    from strategies.archive.cspa import (
         PullbackRhythm,
         composite_rhythm_score,
         observe_pullback_efficiency,
     )
-    from strategies.cspa_arrays import atr_at_index
-    from strategies.cspa_scan_hot import build_pullback_rhythm_np
+    from strategies.archive.cspa_arrays import atr_at_index
+    from strategies.archive.cspa_scan_hot import build_pullback_rhythm_np
 
     if scan_numba_active():
-        from strategies.cspa_scan_numba import (
+        from strategies.archive.cspa_scan_numba import (
             observe_correction_smoothness_numba,
             observe_overlap_ratio_numba,
         )
@@ -306,15 +306,15 @@ def resolve_momentum_trigger_fast(
     direction: str,
     stagnation: StagnationCluster,
 ):
-    from strategies.cspa import (
+    from strategies.archive.cspa import (
         CSPA_FX_SWEEP_MIN_OUTSIDE_RATIO,
         CSPA_FX_SWEEP_MIN_RANGE_ATR,
         MOMENTUM_MIN_BODY_ATR,
     )
-    from strategies.cspa_scan_hot import resolve_momentum_trigger_np
+    from strategies.archive.cspa_scan_hot import resolve_momentum_trigger_np
 
     if scan_numba_active():
-        from strategies.cspa_scan_numba import (
+        from strategies.archive.cspa_scan_numba import (
             detect_momentum_breakout_numba,
             detect_sweep_engulfing_numba,
             momentum_from_numba_tuple,
@@ -364,12 +364,12 @@ def resolve_momentum_trigger_fast(
 
 
 def scan_consolidation_zones_fast(arrays: CspaScanArrays, struct_idx: int):
-    from strategies.cspa import (
+    from strategies.archive.cspa import (
         CSPA_CONSOLIDATION_LOOKBACK,
         CSPA_CONSOLIDATION_WINDOW,
         CSPA_CONSOLIDATION_WIDTH_ATR,
     )
-    from strategies.cspa_scan_hot import scan_consolidation_zones_np
+    from strategies.archive.cspa_scan_hot import scan_consolidation_zones_np
 
     return scan_consolidation_zones_np(
         arrays.structure,
@@ -394,7 +394,7 @@ def build_trend_context_fast(
     high_bar_indices: list[int],
     low_bar_indices: list[int],
 ):
-    from strategies.cspa_scan_hot import build_trend_context_np
+    from strategies.archive.cspa_scan_hot import build_trend_context_np
 
     return build_trend_context_np(
         arrays.bias,
@@ -418,16 +418,16 @@ def build_stagnation_quality_fast(
     momentum,
     direction: str,
 ):
-    from strategies.cspa import (
+    from strategies.archive.cspa import (
         StagnationQuality,
         composite_stagnation_quality_score,
         observe_compression_ratio,
         observe_range_decay_score,
     )
-    from strategies.cspa_scan_hot import build_stagnation_quality_np
+    from strategies.archive.cspa_scan_hot import build_stagnation_quality_np
 
     if scan_numba_active():
-        from strategies.cspa_scan_numba import observe_wick_balance_numba
+        from strategies.archive.cspa_scan_numba import observe_wick_balance_numba
 
         wick_balance = observe_wick_balance_numba(
             arrays.trigger.open,
@@ -465,8 +465,8 @@ def build_reacceleration_fast(
     momentum,
     direction: str,
 ):
-    from strategies.cspa import CSPA_REACCEL_IMBALANCE_LOOKBACK
-    from strategies.cspa_scan_hot import build_reacceleration_np
+    from strategies.archive.cspa import CSPA_REACCEL_IMBALANCE_LOOKBACK
+    from strategies.archive.cspa_scan_hot import build_reacceleration_np
 
     return build_reacceleration_np(
         arrays.trigger,
@@ -478,7 +478,7 @@ def build_reacceleration_fast(
 
 
 def atr_at_bar_fast(arrays: CspaScanArrays, frame: str, bar_index: int) -> float:
-    from strategies.cspa_arrays import atr_at_index
+    from strategies.archive.cspa_arrays import atr_at_index
 
     if frame == "structure":
         return atr_at_index(arrays.structure_atr, bar_index)
@@ -494,7 +494,7 @@ def evaluate_cspa_vp_location_fast(
     direction: str,
     bar_index: int,
 ) -> tuple[bool, int, dict]:
-    from strategies.cspa_scan_hot import evaluate_cspa_vp_location_np
+    from strategies.archive.cspa_scan_hot import evaluate_cspa_vp_location_np
 
     return evaluate_cspa_vp_location_np(
         arrays.trigger,
@@ -506,10 +506,10 @@ def evaluate_cspa_vp_location_fast(
 
 
 def classify_bias_dow_phase_fast(ctx, bias_idx: int) -> str:
-    from strategies.cspa_scan_hot import classify_bias_dow_phase_np
+    from strategies.archive.cspa_scan_hot import classify_bias_dow_phase_np
 
     if scan_numba_active():
-        from strategies.cspa_scan_numba import (
+        from strategies.archive.cspa_scan_numba import (
             classify_bias_dow_phase_numba,
             phase_from_numba,
         )
@@ -533,11 +533,11 @@ def classify_bias_dow_phase_fast(ctx, bias_idx: int) -> str:
 
 
 def find_latest_impulse_fast(ctx, struct_idx: int, phase: str):
-    from strategies.cspa import SWING_LOOKBACK_STRUCTURE
-    from strategies.cspa_scan_hot import find_latest_impulse_np
+    from strategies.archive.cspa import SWING_LOOKBACK_STRUCTURE
+    from strategies.archive.cspa_scan_hot import find_latest_impulse_np
 
     if scan_numba_active():
-        from strategies.cspa_scan_numba import (
+        from strategies.archive.cspa_scan_numba import (
             PHASE_DOWNTREND,
             PHASE_NONE,
             PHASE_RANGE,

@@ -16,7 +16,7 @@ from typing import Any, Iterator
 import numpy as np
 import pandas as pd
 
-from strategies.cspa_arrays import (
+from strategies.archive.cspa_arrays import (
     OhlcvArrays,
     atr_at_index,
     compute_atr_np,
@@ -59,6 +59,11 @@ def as_ohlcv(obj: Any) -> OhlcvArrays:
 def ts_ns_to_pd(ts_ns: int) -> pd.Timestamp:
     """Naive bar timestamp from OHLCV ``datetime_ns`` (timezone-independent)."""
     return pd.Timestamp(int(ts_ns))
+
+
+def day_norm_from_datetime_ns(datetime_ns: np.ndarray) -> np.ndarray:
+    """Calendar day (datetime64[D]) from int64 nanosecond timestamps."""
+    return datetime_ns.astype("datetime64[ns]").astype("datetime64[D]")
 
 
 def normalize_ts_ns(ts: pd.Timestamp | str | int | np.datetime64) -> int:

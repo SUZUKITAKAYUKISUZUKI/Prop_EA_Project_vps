@@ -34,6 +34,7 @@ from pyramid_manager import (
     PyramidManager,
     PyramidPosition,
     is_pyramid_enabled,
+    is_pyramid_enabled_for_pending,
     pyramid_result_to_record_fields,
     track_with_pyramid,
 )
@@ -67,7 +68,7 @@ def _apply_trade_outcome(
     """
     Phase-2: L5 未来追跡（ピラミッド OFF 時は main_platform 委譲、ON 時は PyramidManager）。
     """
-    if not is_pyramid_enabled(pending.setup_type):
+    if not is_pyramid_enabled_for_pending(pending):
         record = _apply_trade_outcome_base(
             pending,
             account,
@@ -91,7 +92,7 @@ def _apply_trade_outcome(
     pair_df = gbp_df if uses_primary_dataframe(setup.pair) else eur_df
     take_profit = setup.take_profit
     if pending.setup_type == "CSPA":
-        from strategies.cspa import CspaSetup, scale_cspa_take_profit
+        from strategies.archive.cspa import CspaSetup, scale_cspa_take_profit
 
         if isinstance(setup, CspaSetup):
             take_profit = scale_cspa_take_profit(
@@ -124,6 +125,7 @@ def _apply_trade_outcome(
         entry_timestamp=pd.Timestamp(setup.timestamp),
         max_holding_bars=holding_cap,
         setup_type=pending.setup_type,
+        skip_strategy_enable_check=True,
     )
 
     shadow_result = pyramid_result.result if pyramid_result.result in ("WIN", "LOSS") else "LOSS"
@@ -217,6 +219,23 @@ def _apply_trade_outcome(
         "htf_counter_trend": pending.htf_counter_trend,
         "htf_lot_multiplier": round(pending.htf_lot_multiplier, 4),
         "fvg_final_lot_factor": round(pending.fvg_final_lot_factor, 4),
+        "ev_rank": round(
+            pending.dn_ev_rank_v2
+            if isinstance(setup, DiNapoliSetup) and pending.dn_prop_gate_tier
+            else (
+                pending.dn_ev_rank
+                if isinstance(setup, DiNapoliSetup) and pending.dn_ev_bucket
+                else pending.ttm_ev_rank
+            ),
+            6,
+        ),
+        "ev_lot_multiplier": round(
+            pending.dn_prop_gate_lot_multiplier
+            if isinstance(setup, DiNapoliSetup) and pending.dn_prop_gate_tier
+            else pending.ttm_ev_lot_multiplier,
+            4,
+        ),
+        "sized_result_r": round(profit_r, 4),
         **pyramid_result_to_record_fields(pyramid_result),
         "_setup": setup,
         "_pending": pending,

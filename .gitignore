@@ -10,4 +10,6 @@ cache/*
 logs/*
 !logs/.gitkeep
 
-storage/
+storage/*
+!storage/dn_feature_store.py
+!storage/.gitkeep

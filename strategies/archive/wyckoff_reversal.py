@@ -18,7 +18,7 @@ import pandas as pd
 
 from strategies.base import StrategyResult
 from strategies.base_strategy import BaseStrategy
-from strategies.cspa import resolve_cspa_session_type
+from strategies.archive.cspa import resolve_cspa_session_type
 from strategies.htf_trend_analyzer import analyze_htf_trend, clip_as_of, resample_to_htf
 from strategies.market_utils import compute_atr, pip_size_for_pair
 
@@ -1716,7 +1716,7 @@ def simulate_wyckoff_pyramid(
         raise RuntimeError("simulate_wyckoff_pyramid is only available in BACKTEST_MODE")
 
     from strategies.bt_ohlcv import as_ohlcv
-    from strategies.cspa_arrays import atr_at_index, compute_atr_np
+    from strategies.archive.cspa_arrays import atr_at_index, compute_atr_np
 
     exec_arr = as_ohlcv(m15_df)
     start_index = int(setup.recovery_bar_index)

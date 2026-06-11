@@ -10,10 +10,10 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 
-from strategies.cspa_arrays import OhlcvArrays, atr_at_index, timestamp_from_ns, body_size
+from strategies.archive.cspa_arrays import OhlcvArrays, atr_at_index, timestamp_from_ns, body_size
 
 if TYPE_CHECKING:
-    from strategies.cspa import (
+    from strategies.archive.cspa import (
         ConsolidationZone,
         ImpulseLeg,
         MomentumSignal,
@@ -181,7 +181,7 @@ def build_pullback_rhythm_np(
     struct_idx: int,
     retrace_ratio: float,
 ) -> PullbackRhythm:
-    from strategies.cspa import (
+    from strategies.archive.cspa import (
         composite_rhythm_score,
         observe_pullback_efficiency,
     )
@@ -197,7 +197,7 @@ def build_pullback_rhythm_np(
     retrace_distance = retrace_ratio * impulse.impulse_size
     efficiency = observe_pullback_efficiency(retrace_distance, duration)
     rhythm = composite_rhythm_score(overlap, smoothness, efficiency, atr)
-    from strategies.cspa import PullbackRhythm
+    from strategies.archive.cspa import PullbackRhythm
 
     return PullbackRhythm(
         duration_bars=duration,
@@ -212,7 +212,7 @@ def build_pullback_rhythm_np(
 def _empty_momentum(bar_index: int) -> MomentumSignal:
     from datetime import datetime, timezone
 
-    from strategies.cspa import MomentumSignal
+    from strategies.archive.cspa import MomentumSignal
 
     return MomentumSignal(
         detected=False,
@@ -240,7 +240,7 @@ def detect_momentum_breakout_np(
     *,
     min_body_atr: float,
 ) -> MomentumSignal:
-    from strategies.cspa import MomentumSignal, MomentumType
+    from strategies.archive.cspa import MomentumSignal, MomentumType
 
     empty = _empty_momentum(bar_index)
     if bar_index < 1 or bar_index >= trigger.length:
@@ -298,7 +298,7 @@ def detect_sweep_engulfing_np(
     min_range_atr: float,
     min_outside_ratio: float,
 ) -> MomentumSignal:
-    from strategies.cspa import MomentumSignal
+    from strategies.archive.cspa import MomentumSignal
 
     empty = _empty_momentum(bar_index)
     if bar_index < 1 or bar_index >= trigger.length:
@@ -392,7 +392,7 @@ def scan_consolidation_zones_np(
     window: int,
     width_atr: float,
 ) -> list[ConsolidationZone]:
-    from strategies.cspa import ConsolidationZone
+    from strategies.archive.cspa import ConsolidationZone
 
     start_i = max(window, up_to_bar - lookback + 1)
     zones: list[ConsolidationZone] = []
@@ -443,7 +443,7 @@ def build_trend_context_np(
     low_bar_indices: list[int],
     volatility_percentile: float,
 ) -> TrendContext:
-    from strategies.cspa import TrendContext, _volatility_regime_from_percentile
+    from strategies.archive.cspa import TrendContext, _volatility_regime_from_percentile
 
     trend_age = max(0, struct_idx - impulse.start_index)
     regime = _volatility_regime_from_percentile(volatility_percentile)
@@ -521,7 +521,7 @@ def build_stagnation_quality_np(
     momentum: MomentumSignal,
     direction: TradeDirection,
 ) -> StagnationQuality:
-    from strategies.cspa import (
+    from strategies.archive.cspa import (
         StagnationQuality,
         composite_stagnation_quality_score,
         observe_compression_ratio,
@@ -560,7 +560,7 @@ def build_reacceleration_np(
     *,
     imbalance_lookback: int,
 ) -> Reacceleration:
-    from strategies.cspa import Reacceleration, composite_reacceleration_score
+    from strategies.archive.cspa import Reacceleration, composite_reacceleration_score
 
     idx = momentum.bar_index
     atr = momentum.atr if momentum.atr > 0 else 1e-9
@@ -610,7 +610,7 @@ def find_swings_np(
     lookback: int,
     up_to_bar_index: int | None = None,
 ) -> tuple[list[SwingPoint], list[SwingPoint]]:
-    from strategies.cspa import SwingPoint
+    from strategies.archive.cspa import SwingPoint
 
     if lookback < 1 or ohlcv.length < lookback * 2 + 1:
         return [], []
@@ -690,7 +690,7 @@ def find_latest_impulse_np(
     low_bar_indices: list[int],
     min_warmup: int,
 ) -> ImpulseLeg | None:
-    from strategies.cspa import ImpulseLeg
+    from strategies.archive.cspa import ImpulseLeg
 
     if phase not in ("UPTREND", "DOWNTREND") or bar_index < min_warmup:
         return None
@@ -868,7 +868,7 @@ def _utc_dt_from_ns(ts_ns: int):
 
 
 def resolve_cspa_session_type_ns(ts_ns: int) -> str:
-    from strategies.cspa import DATA_DST_TYPE, _cspa_session_hour_ranges
+    from strategies.archive.cspa import DATA_DST_TYPE, _cspa_session_hour_ranges
 
     ts = _utc_dt_from_ns(ts_ns)
     hour = int(ts.hour)
@@ -885,7 +885,7 @@ def resolve_cspa_session_type_ns(ts_ns: int) -> str:
 def session_window_start_ns(ts_ns: int, session_type: str) -> int:
     from datetime import timedelta, timezone
 
-    from strategies.cspa import CSPA_SESSION_OPEN_HOUR, DATA_DST_TYPE, shift_hour
+    from strategies.archive.cspa import CSPA_SESSION_OPEN_HOUR, DATA_DST_TYPE, shift_hour
 
     ts = _utc_dt_from_ns(ts_ns)
     open_hour = shift_hour(ts.date(), CSPA_SESSION_OPEN_HOUR[session_type], DATA_DST_TYPE)
@@ -900,7 +900,7 @@ def session_window_start_ns(ts_ns: int, session_type: str) -> int:
 def minutes_from_session_open_ns(ts_ns: int, session_type: str) -> int:
     from datetime import timedelta, timezone
 
-    from strategies.cspa import CSPA_SESSION_OPEN_HOUR, DATA_DST_TYPE, shift_hour
+    from strategies.archive.cspa import CSPA_SESSION_OPEN_HOUR, DATA_DST_TYPE, shift_hour
 
     ts = _utc_dt_from_ns(ts_ns)
     open_hour = shift_hour(ts.date(), CSPA_SESSION_OPEN_HOUR[session_type], DATA_DST_TYPE)
@@ -959,7 +959,7 @@ def evaluate_cspa_vp_location_np(
     direction: TradeDirection,
     bar_index: int,
 ) -> tuple[bool, int, dict[str, float]]:
-    from strategies.cspa import (
+    from strategies.archive.cspa import (
         CSPA_VP_BUFFER_ATR_MULT,
         CSPA_VP_BUFFER_PIPS,
         CSPA_VP_SCORE_TIERS,
@@ -1091,7 +1091,7 @@ def breakout_momentum_ratio_np(trigger: OhlcvArrays, momentum: MomentumSignal) -
 
 
 def compute_adr_pair_np(adr_cache, struct_idx: int) -> tuple[float, float]:
-    from strategies.cspa import CSPA_ADR_LOOKBACK_DAYS
+    from strategies.archive.cspa import CSPA_ADR_LOOKBACK_DAYS
 
     if struct_idx < 0 or struct_idx >= len(adr_cache.highs):
         return 0.0, 1.0

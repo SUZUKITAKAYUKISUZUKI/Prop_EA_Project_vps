@@ -444,7 +444,7 @@ def modify_position_sl(
 
 def register_cspa_exit_tracker(symbol: str, magic: int, signal: dict[str, Any]) -> None:
     """直近エントリーの CSPA ポジションに出口トラッカーを紐付け。"""
-    from strategies.cspa_exit import CspaExitTracker
+    from strategies.archive.cspa_exit import CspaExitTracker
 
     ensure_mt5_initialized()
     positions = mt5.positions_get(symbol=symbol)

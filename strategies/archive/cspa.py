@@ -1,7 +1,8 @@
 """
-CSPA — Candlestick Price Action (Strategy B / ローソク足 × 半値戻し × 波の角)
+CSPA — Candlestick Price Action (旧 Strategy B / ローソク足 × 半値戻し × 波の角)
 
-正式採用: 2026-06-09（WFT IS12/OOS3/step3 — 平均 OOS +18.88R, DD 超過 0%）
+アーカイブ: 2026-06-01 — 検証の結果、プロップ用ポートフォリオには向いていない。
+（WFT 採用時: 2026-06-09 — IS12/OOS3/step3 平均 OOS +18.88R, DD 超過 0%）
 
 Methodology source: docs/candlestick.pdf
 
@@ -790,7 +791,7 @@ def _volatility_percentile_from_atr(
 ) -> float:
     """Precomputed H1 ATR 系列から分位（O(lookback)・ATR 再計算なし）。"""
     if isinstance(atr_series, np.ndarray):
-        from strategies.cspa_scan_hot import volatility_percentile_np
+        from strategies.archive.cspa_scan_hot import volatility_percentile_np
 
         return volatility_percentile_np(
             atr_series,
@@ -3114,8 +3115,8 @@ class CspaStrategy(BaseStrategy):
 
         consolidation_cache: dict[int, list[ConsolidationZone]] = {}
 
-        from strategies.cspa_scan_context import build_scan_context, build_cspa_bayes_features_np
-        from strategies.cspa_scan_engine import (
+        from strategies.archive.cspa_scan_context import build_scan_context, build_cspa_bayes_features_np
+        from strategies.archive.cspa_scan_engine import (
             atr_at_bar_fast,
             build_pullback_rhythm_fast,
             build_reacceleration_fast,

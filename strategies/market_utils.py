@@ -37,6 +37,18 @@ def uses_primary_dataframe(pair: str) -> bool:
     return pair.upper() in PRIMARY_SLOT_PAIRS
 
 
+def pair_dataframe_slot(
+    pair: str,
+    gbp_df: pd.DataFrame,
+    eur_df: pd.DataFrame,
+    *,
+    setup_type: str | None = None,
+) -> pd.DataFrame:
+    """BT 用: ペアに対応する gbp/eur OHLCV スロットを返す。"""
+    del setup_type
+    return gbp_df if uses_primary_dataframe(pair) else eur_df
+
+
 def correlated_pair(pair: str) -> str:
     """相関ペア名を返す（未定義時は入力をそのまま返す）。"""
     return CORRELATED_PAIR.get(pair.upper(), pair.upper())

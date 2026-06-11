@@ -46,6 +46,7 @@ v1.6 変更点:
 from __future__ import annotations
 
 import json
+import os
 import random
 from collections import defaultdict
 from contextlib import contextmanager
@@ -99,22 +100,54 @@ from strategies.archive.fvg_fill import (
 from strategies.archive.tokyo_range_expansion_failure import TrefSetup, SETUP_TYPE as TREF_SETUP_TYPE
 from strategies.archive.vexp import SETUP_TYPE as VEXP_SETUP_TYPE, VexpSetup
 from strategies.archive.dtpa import DtpaSetup, SETUP_TYPE as DTPA_SETUP_TYPE
-from strategies.cspa import CspaSetup, SETUP_TYPE as CSPA_SETUP_TYPE, is_cspa_pure_bt_mode, scale_cspa_take_profit, track_cspa_trade_outcome
-from strategies.cspa_exit import build_cspa_exit_signal_fields
+from strategies.archive.cspa import CspaSetup, SETUP_TYPE as CSPA_SETUP_TYPE, is_cspa_pure_bt_mode, scale_cspa_take_profit, track_cspa_trade_outcome
+from strategies.dinapoli import (
+    DiNapoliSetup,
+    SETUP_TYPE as DINAPOLI_SETUP_TYPE,
+    is_dinapoli_defense_pure_mode,
+    is_dinapoli_l4_bypass,
+    is_dinapoli_pure_bt_mode,
+)
+from strategies.ttm import (
+    TtmSetup,
+    SETUP_TYPE as TTM_SETUP_TYPE,
+    is_ttm_l4_bypass,
+    is_ttm_pure_data_mode,
+)
+from strategies.ttm_bayes_ev import (
+    evaluate_ttm_ev_sizing_for_setup,
+    evaluate_ttm_ev_with_runtime,
+    is_ttm_ev_sizing_mode,
+    should_reject_ttm_bottom20,
+)
+from strategies.archive.cspa_exit import build_cspa_exit_signal_fields
 from strategies.archive.wyckoff_reversal import (
     SpringSetup,
     SETUP_TYPE as WYCKOFF_SETUP_TYPE,
     SETUP_TYPE_LEGACY as WYCKOFF_SETUP_TYPE_LEGACY,
     is_wyckoff_pure_bt_mode,
 )
-from strategies.liquidity_grab_reversal import (
+from strategies.archive.liquidity_grab_reversal import (
     LgrSetup,
     SETUP_TYPE as LGR_SETUP_TYPE,
+    is_lgr_defense_pure_mode,
+    is_lgr_l0_ev_baseline_mode,
+    is_lgr_l4_bypass,
     is_lgr_pure_data_mode,
+)
+from archive.lgr.lgr_ev_position_sizing import evaluate_lgr_ev_sizing_for_setup, is_lgr_ev_sizing_enabled
+from src.filters.dn_prop_gate_runtime import prop_gate_enabled, score_dn_prop_gate_from_setup
+from src.filters.dn_prop_gate_v1 import dn_prop_gate_base_risk_frac
+from archive.lgr.lgr_bayes_gate import (
+    LGR_BAYES_REJECT_SOURCE,
+    evaluate_lgr_bayes_gate,
+    features_from_lgr_setup,
+    is_lgr_bayes_gate_enabled,
 )
 
 WYCKOFF_SETUP_TYPES = frozenset({WYCKOFF_SETUP_TYPE, WYCKOFF_SETUP_TYPE_LEGACY})
 LGR_SETUP_TYPES = frozenset({LGR_SETUP_TYPE})
+TTM_SETUP_TYPES = frozenset({TTM_SETUP_TYPE})
 from strategies.market_utils import (
     CORRELATED_PAIR,
     SMTFeatures,
@@ -122,6 +155,7 @@ from strategies.market_utils import (
     calc_smt_intensity,
     correlated_pair,
     pip_size_for_pair,
+    pair_dataframe_slot,
     positional_index as _positional_index,
     uses_primary_dataframe,
 )
@@ -132,7 +166,7 @@ from strategies.mtf_timestamp import (
 )
 from strategies import get_registered_strategies
 
-SetupUnion = LsfcSetup | ContinuationSetup | AlsSetup | FvgFillSetup | TrefSetup | VexpSetup | DtpaSetup | CspaSetup | SpringSetup | LgrSetup
+SetupUnion = LsfcSetup | ContinuationSetup | AlsSetup | FvgFillSetup | TrefSetup | VexpSetup | DtpaSetup | CspaSetup | SpringSetup | LgrSetup | DiNapoliSetup
 
 # =============================================================================
 # ■ ユーザー設定定数（ここを書き換えるだけでモード切替）
@@ -276,7 +310,7 @@ def uses_l2_math_position_sizer(setup_type: str) -> bool:
         DTPA_SETUP_TYPE,
         CSPA_SETUP_TYPE,
         VEXP_SETUP_TYPE,
-    ) or setup_type in WYCKOFF_SETUP_TYPES or setup_type in LGR_SETUP_TYPES:
+    ) or setup_type in WYCKOFF_SETUP_TYPES or setup_type in LGR_SETUP_TYPES or setup_type in TTM_SETUP_TYPES:
         return False
     if is_l4_bypass_setup_type(setup_type):
         return False
@@ -355,8 +389,8 @@ M5_BOS_MAX_ADVERSE_WICK_RATIO = 0.55  # 逆方向ヒゲが55%超なら BOS 無�
 # --- L3/L4 LLM ---
 MODEL_VERSION = "gemini-3.1-flash-lite"  # GEMINI_MODEL / llm_auditor.resolve_gemini_model() と同期
 LSFC_L4_MODEL_VERSION = "RULE_BASE_ONLY"
-RULE_BASE_ONLY_SETUP_TYPES = frozenset({LSFC_SETUP_TYPE, ALS_SETUP_TYPE, VEXP_SETUP_TYPE, CSPA_SETUP_TYPE}) | WYCKOFF_SETUP_TYPES | LGR_SETUP_TYPES
-BAYES_BYPASS_SETUP_TYPES = WYCKOFF_SETUP_TYPES | LGR_SETUP_TYPES
+RULE_BASE_ONLY_SETUP_TYPES = frozenset({LSFC_SETUP_TYPE, ALS_SETUP_TYPE, VEXP_SETUP_TYPE, CSPA_SETUP_TYPE}) | WYCKOFF_SETUP_TYPES | LGR_SETUP_TYPES | TTM_SETUP_TYPES
+BAYES_BYPASS_SETUP_TYPES = WYCKOFF_SETUP_TYPES | LGR_SETUP_TYPES | TTM_SETUP_TYPES
 BAYES_BYPASS_NEUTRAL_PROBABILITY = 1.0
 # CSPA L3.5: audit.cspa_bayes_gate.evaluate_cspa_bayes_gate (CSPABayesEngine 3-Tier)
 
@@ -402,7 +436,11 @@ def is_defense_pure_setup(setup_type: str) -> bool:
     if setup_type in WYCKOFF_SETUP_TYPES:
         return is_wyckoff_pure_bt_mode()
     if setup_type in LGR_SETUP_TYPES:
-        return is_lgr_pure_data_mode()
+        return is_lgr_defense_pure_mode()
+    if setup_type in TTM_SETUP_TYPES:
+        return is_ttm_pure_data_mode()
+    if setup_type == DINAPOLI_SETUP_TYPE:
+        return is_dinapoli_defense_pure_mode()
     return False
 
 
@@ -437,9 +475,13 @@ def is_bayes_bypass_setup_type(setup_type: str) -> bool:
 
         return is_wyckoff_l4_bypass()
     if setup_type in LGR_SETUP_TYPES:
-        return is_lgr_pure_data_mode()
+        return not is_lgr_bayes_gate_enabled()
     if setup_type == CSPA_SETUP_TYPE and is_cspa_pure_bt_mode():
         return True
+    if setup_type == DINAPOLI_SETUP_TYPE:
+        from strategies.dinapoli import is_dinapoli_generic_bayes_bypass
+
+        return is_dinapoli_generic_bayes_bypass()
     return setup_type in BAYES_BYPASS_SETUP_TYPES
 
 
@@ -456,8 +498,12 @@ def is_l4_bypass_setup_type(setup_type: str) -> bool:
 
         return is_wyckoff_l4_bypass()
     if setup_type in LGR_SETUP_TYPES:
-        return is_lgr_pure_data_mode()
+        return is_lgr_l4_bypass()
+    if setup_type in TTM_SETUP_TYPES:
+        return is_ttm_l4_bypass()
     if setup_type == CSPA_SETUP_TYPE and is_cspa_pure_bt_mode():
+        return True
+    if setup_type == DINAPOLI_SETUP_TYPE and is_dinapoli_l4_bypass():
         return True
     if setup_type == TREF_SETUP_TYPE:
         from strategies.archive.tokyo_range_expansion_failure import load_tref_config
@@ -566,6 +612,8 @@ CSV_COLUMNS = [
     "atr_ratio",
     "has_bos",
     "wyckoff_features",
+    "lgr_features",
+    "ttm_features",
     "vp_zone",
     "l2_regime",
     "l2_base_lot_factor",
@@ -576,6 +624,9 @@ CSV_COLUMNS = [
     "htf_counter_trend",
     "htf_lot_multiplier",
     "fvg_final_lot_factor",
+    "ev_rank",
+    "ev_lot_multiplier",
+    "sized_result_r",
 ]
 
 
@@ -865,6 +916,8 @@ def _rule_base_l4_bypass_result(
         tags.append("WYCKOFF_L4_BYPASS")
     elif setup_type in LGR_SETUP_TYPES:
         tags.append("LGR_L4_BYPASS")
+    elif setup_type in TTM_SETUP_TYPES:
+        tags.append("TTM_L4_BYPASS")
     else:
         tags.append("RULE_BASE_L4_BYPASS")
     if htf_would_block:
@@ -878,7 +931,7 @@ def has_rule_base_l4_bypass_tag(tags: list[str] | tuple[str, ...]) -> bool:
     tag_set = set(tags)
     return bool(
         tag_set
-        & {"L4_BYPASS", "LSFC_L4_BYPASS", "ALS_L4_BYPASS", "TREF_L4_BYPASS", "CSPA_L4_BYPASS", "WYCKOFF_L4_BYPASS", "LGR_L4_BYPASS", "RULE_BASE_L4_BYPASS"}
+        & {"L4_BYPASS", "LSFC_L4_BYPASS", "ALS_L4_BYPASS", "TREF_L4_BYPASS", "CSPA_L4_BYPASS", "WYCKOFF_L4_BYPASS", "LGR_L4_BYPASS", "TTM_L4_BYPASS", "RULE_BASE_L4_BYPASS"}
     )
 
 
@@ -969,6 +1022,19 @@ class PendingEvaluation:
     fvg_final_lot_factor: float = 0.0
     cspa_gate_reason: str = ""
     cspa_tp_multiplier: float = 1.0
+    lgr_bayes_regime: str = ""
+    lgr_bayes_reason: str = ""
+    lgr_ev_score: float = 0.0
+    lgr_ev_rank: float = 0.0
+    lgr_ev_lot_multiplier: float = 1.0
+    ttm_bayes_win_prob: float = 0.0
+    ttm_ev_rank: float = 0.0
+    ttm_ev_lot_multiplier: float = 1.0
+    dn_ev_rank: float = 0.0
+    dn_ev_bucket: str = ""
+    dn_ev_rank_v2: float = 0.0
+    dn_prop_gate_tier: str = ""
+    dn_prop_gate_lot_multiplier: float = 1.0
 
 
 # =============================================================================
@@ -1039,6 +1105,8 @@ def _setup_type_for_llm(setup: Any) -> str:
         return WYCKOFF_SETUP_TYPE
     if isinstance(setup, LgrSetup):
         return LGR_SETUP_TYPE
+    if isinstance(setup, DiNapoliSetup):
+        return DINAPOLI_SETUP_TYPE
     return "LONDON_CONTINUATION"
 
 
@@ -1245,7 +1313,7 @@ def resolve_volume_profile_context(
         return None
     try:
         from llm_auditor import build_volume_profile_context_from_levels
-        from strategies.cspa import compute_cspa_session_volume_profile, evaluate_cspa_vp_location, resolve_cspa_session_type
+        from strategies.archive.cspa import compute_cspa_session_volume_profile, evaluate_cspa_vp_location, resolve_cspa_session_type
         from strategies.market_utils import pip_size_for_pair
         from volume_profile_analyzer import SessionVolumeProfile, normalize_trade_direction
 
@@ -1762,6 +1830,59 @@ def _build_daily_stop_reject_pending(
     )
 
 
+def _build_lgr_prop_filter_reject_pending(
+    setup: SetupUnion,
+    strategy: BaseStrategy,
+    gbp_s: SetupUnion | None,
+    eur_s: SetupUnion | None,
+    account: AccountState,
+    equity_snapshot: float,
+    daily_rem: float,
+    monthly_rem: float,
+    streak_snapshot: int,
+    trade_id: str,
+    gbp_df: pd.DataFrame,
+    eur_df: pd.DataFrame,
+    *,
+    decision_source: str,
+    tags: tuple[str, ...],
+) -> PendingEvaluation:
+    pair_df = gbp_df if uses_primary_dataframe(setup.pair) else eur_df
+    start_idx = _resolve_track_start_index(pair_df, setup)
+    return PendingEvaluation(
+        trade_id=trade_id,
+        setup_type=strategy.setup_type,
+        setup=setup,
+        gbp_s=gbp_s,
+        eur_s=eur_s,
+        equity_before=equity_snapshot,
+        daily_rem=daily_rem,
+        monthly_rem=monthly_rem,
+        smt=0.0,
+        smt_diff=0.0,
+        smt_leader="NONE",
+        has_bos=False,
+        candidate_score=0.0,
+        atr_ratio=0.0,
+        both_sweep=False,
+        tags=list(tags),
+        risk_score=0,
+        latency=0,
+        decision_source=decision_source,
+        is_reject=True,
+        bayes_probability=0.0,
+        consecutive_losses_snapshot=streak_snapshot,
+        profile=account.profile,
+        llm_eligible=False,
+        risk_budget=0.0,
+        lot_size=0.0,
+        lot_factor=0.0,
+        trade_risk_pct=0.0,
+        minutes_to_news=0,
+        start_idx=start_idx,
+    )
+
+
 def _build_mutual_exclusion_reject_pending(
     setup: SetupUnion,
     strategy: BaseStrategy,
@@ -1852,6 +1973,8 @@ def _evaluate_setup_at_timestamp(
     streak_snapshot = account.consecutive_losses
     setup_type = strategy.setup_type
     defense_pure = is_defense_pure_setup(setup_type)
+    lgr_baseline = setup_type in LGR_SETUP_TYPES and is_lgr_l0_ev_baseline_mode()
+    entry_filter_bypass = defense_pure or lgr_baseline
 
     account.purge_closed_positions(setup.timestamp)
 
@@ -1859,7 +1982,7 @@ def _evaluate_setup_at_timestamp(
     blocked, blocking_type = account.is_blocked_by_mutual_exclusion(
         setup.timestamp, setup.pair, setup_type
     )
-    if blocked and blocking_type is not None and not defense_pure:
+    if blocked and blocking_type is not None and not entry_filter_bypass:
         return _build_mutual_exclusion_reject_pending(
             setup,
             strategy,
@@ -1896,6 +2019,45 @@ def _evaluate_setup_at_timestamp(
             gbp_df,
             eur_df,
         )
+
+    if lgr_baseline and isinstance(setup, LgrSetup):
+        from archive.lgr.lgr_prop_controls import lgr_max_open_positions, session_open_minutes_reject
+
+        if session_open_minutes_reject(int(setup.lgr_features.minutes_from_session_open)):
+            return _build_lgr_prop_filter_reject_pending(
+                setup,
+                strategy,
+                gbp_s,
+                eur_s,
+                account,
+                equity_snapshot,
+                daily_rem,
+                monthly_rem,
+                streak_snapshot,
+                trade_id,
+                gbp_df,
+                eur_df,
+                decision_source="REJECT_BY_SESSION_OPEN",
+                tags=("LGR_SESSION_OPEN_FILTER",),
+            )
+        max_pos = lgr_max_open_positions()
+        if max_pos is not None and len(account.open_positions) >= max_pos:
+            return _build_lgr_prop_filter_reject_pending(
+                setup,
+                strategy,
+                gbp_s,
+                eur_s,
+                account,
+                equity_snapshot,
+                daily_rem,
+                monthly_rem,
+                streak_snapshot,
+                trade_id,
+                gbp_df,
+                eur_df,
+                decision_source="REJECT_BY_MAX_POSITIONS",
+                tags=("LGR_MAX_POSITIONS",),
+            )
 
     if l0_exposure_fail and not defense_pure:
         return _build_l0_exposure_reject_pending(
@@ -1939,34 +2101,54 @@ def _evaluate_setup_at_timestamp(
         and setup_type != FVG_FILL_SETUP_TYPE
         and raw.get("reject_reason") == "REJECT_BY_HTF_TREND"
     )
-    smt = float(raw["smt_intensity"])
-    smt_feats = SMTFeatures(
-        intensity=smt,
-        diff=float(raw["smt_diff"]),
-        leader=str(raw["smt_leader"]),
-    )
-    has_bos = bool(raw["has_bos"])
+    if setup_type in TTM_SETUP_TYPES:
+        smt = 0.0
+        smt_feats = SMTFeatures(intensity=0.0, diff=0.0, leader="UNK")
+        has_bos = False
+        atr_ratio = float(raw.get("pre_ttm_atr_ratio", 0.0))
+        both_sweep = False
+    else:
+        smt = float(raw["smt_intensity"])
+        smt_feats = SMTFeatures(
+            intensity=smt,
+            diff=float(raw["smt_diff"]),
+            leader=str(raw["smt_leader"]),
+        )
+        has_bos = bool(raw["has_bos"])
+        atr_ratio = float(raw["atr_ratio"])
+        both_sweep = bool(raw["both_sweep"])
+
     candidate_score = strategy_result.candidate_score
     l2_min = resolve_l2_min_candidate_score(setup_type)
     l2_fail = candidate_score < l2_min
-    if defense_pure:
-        l0_fail = False
+    if entry_filter_bypass:
+        if defense_pure:
+            l0_fail = False
         l1_fail = False
         l2_fail = False
         htf_reject = False
-
-    atr_ratio = float(raw["atr_ratio"])
-    both_sweep = bool(raw["both_sweep"])
 
     tref_loss_pattern_reject = False
     tref_loss_pattern_reason: str | None = None
     cspa_gate: dict[str, Any] | None = None
     cspa_gate_reason = ""
     cspa_tp_multiplier = 1.0
+    lgr_bayes_regime = ""
+    lgr_bayes_reason = ""
 
-    if defense_pure:
+    if defense_pure and not (
+        setup_type in LGR_SETUP_TYPES
+        and is_lgr_bayes_gate_enabled()
+        and isinstance(setup, LgrSetup)
+    ):
         bayes_probability = BAYES_BYPASS_NEUTRAL_PROBABILITY
         bayes_hard_reject = False
+    elif setup_type in LGR_SETUP_TYPES and is_lgr_bayes_gate_enabled() and isinstance(setup, LgrSetup):
+        lgr_bayes = evaluate_lgr_bayes_gate(features_from_lgr_setup(setup))
+        bayes_probability = float(lgr_bayes["bayes_probability"])
+        lgr_bayes_regime = str(lgr_bayes["bayes_regime"])
+        lgr_bayes_reason = str(lgr_bayes["bayes_reason"])
+        bayes_hard_reject = lgr_bayes_regime == "REJECT"
     elif setup_type == TREF_SETUP_TYPE and tref_bayes_filter is not None:
         from audit.tref_bayes_filter import TrefBayesFilter
 
@@ -2021,6 +2203,12 @@ def _evaluate_setup_at_timestamp(
         )
         bayes_hard_reject = check_bayes_hard_reject(bayes_probability)
 
+    lgr_bayes_reject = (
+        setup_type in LGR_SETUP_TYPES
+        and is_lgr_bayes_gate_enabled()
+        and lgr_bayes_regime == "REJECT"
+    )
+
     llm_confidence_score = 0
     llm_reason_summary = ""
     confidence_lot_multiplier = 0.0
@@ -2052,6 +2240,11 @@ def _evaluate_setup_at_timestamp(
             tags.insert(0, trend_tag)
         risk_score, latency, llm_decision, llm_confidence_score, llm_reason_summary = 0, 0, "REJECT", 0, ""
         decision_source = "REJECT_BY_HTF_TREND"
+        llm_eligible = False
+    elif lgr_bayes_reject:
+        tags = [lgr_bayes_regime, lgr_bayes_reason]
+        risk_score, latency, llm_decision, llm_confidence_score, llm_reason_summary = 0, 0, "REJECT", 0, ""
+        decision_source = LGR_BAYES_REJECT_SOURCE
         llm_eligible = False
     elif l2_fail:
         tags, risk_score, latency, llm_decision, llm_confidence_score, llm_reason_summary = _skipped_llm_audit()
@@ -2401,6 +2594,145 @@ def _evaluate_setup_at_timestamp(
         if gate_tag and gate_tag not in tags:
             tags.append(gate_tag)
 
+    lgr_ev_score = 0.0
+    lgr_ev_rank = 0.0
+    lgr_ev_lot_multiplier = 1.0
+    if (
+        setup_type in LGR_SETUP_TYPES
+        and is_lgr_ev_sizing_enabled()
+        and not is_reject
+        and lot_factor > 0.0
+        and isinstance(setup, LgrSetup)
+    ):
+        ev_eval = evaluate_lgr_ev_sizing_for_setup(setup)
+        lgr_ev_score = float(ev_eval["ev_score"])
+        lgr_ev_rank = float(ev_eval["ev_rank"])
+        lgr_ev_lot_multiplier = float(ev_eval["lot_multiplier"])
+        lot_factor = round(lot_factor * lgr_ev_lot_multiplier, 4)
+        lot_factor = audit_rm.apply_lot_factor_floor(lot_factor)
+        base_risk_pct = account.resolved_base_risk_pct()
+        risk_budget = round(equity_snapshot * base_risk_pct * lot_factor, 2)
+        lot_size = audit_rm.lot_from_risk_budget(
+            risk_budget, sl_distance, lot_factor
+        )
+        if "LGR_EV_SIZING" not in tags:
+            tags.append("LGR_EV_SIZING")
+        if lgr_ev_rank >= 0.95 and "LGR_EV_TOP5" not in tags:
+            tags.append("LGR_EV_TOP5")
+        elif lgr_ev_rank >= 0.80 and "LGR_EV_TOP20" not in tags:
+            tags.append("LGR_EV_TOP20")
+        elif lgr_ev_rank >= 0.50 and "LGR_EV_TOP50" not in tags:
+            tags.append("LGR_EV_TOP50")
+        elif "LGR_EV_BOTTOM50" not in tags:
+            tags.append("LGR_EV_BOTTOM50")
+
+    ttm_bayes_win_prob = 0.0
+    ttm_ev_rank = 0.0
+    ttm_ev_lot_multiplier = 1.0
+    if (
+        setup_type in TTM_SETUP_TYPES
+        and is_ttm_ev_sizing_mode()
+        and not is_reject
+        and lot_factor > 0.0
+        and isinstance(setup, TtmSetup)
+    ):
+        train_end = os.getenv("TTM_EV_TRAIN_END")
+        if train_end:
+            ev_eval = evaluate_ttm_ev_sizing_for_setup(setup)
+        else:
+            ev_eval = evaluate_ttm_ev_with_runtime(setup)
+        ttm_bayes_win_prob = float(ev_eval["bayes_win_prob"])
+        ttm_ev_rank = float(ev_eval["ev_rank"])
+        ttm_ev_lot_multiplier = float(ev_eval["ev_lot_multiplier"])
+        bayes_probability = ttm_bayes_win_prob
+        lot_factor = round(lot_factor * ttm_ev_lot_multiplier, 4)
+        lot_factor = audit_rm.apply_lot_factor_floor(lot_factor)
+        base_risk_pct = account.resolved_base_risk_pct()
+        risk_budget = round(equity_snapshot * base_risk_pct * lot_factor, 2)
+        lot_size = audit_rm.lot_from_risk_budget(
+            risk_budget, sl_distance, lot_factor
+        )
+        if "TTM_EV_SIZING" not in tags:
+            tags.append("TTM_EV_SIZING")
+        if ttm_ev_rank >= 0.95 and "TTM_EV_TOP5" not in tags:
+            tags.append("TTM_EV_TOP5")
+        elif ttm_ev_rank >= 0.80 and "TTM_EV_TOP20" not in tags:
+            tags.append("TTM_EV_TOP20")
+        elif ttm_ev_rank >= 0.50 and "TTM_EV_TOP50" not in tags:
+            tags.append("TTM_EV_TOP50")
+        elif "TTM_EV_BOTTOM25" not in tags:
+            tags.append("TTM_EV_BOTTOM25")
+        from dataclasses import replace
+
+        setup.ttm_features = replace(
+            setup.ttm_features,
+            bayes_win_prob=ttm_bayes_win_prob,
+            ev_rank=ttm_ev_rank,
+            ev_lot_multiplier=ttm_ev_lot_multiplier,
+        )
+        if should_reject_ttm_bottom20(ttm_ev_rank):
+            decision_source = "REJECT_BY_TTM_EV_BOTTOM20"
+            is_reject = True
+            lot_factor = 0.0
+            lot_size = 0.0
+            risk_budget = 0.0
+            trade_risk_pct = 0.0
+            if "TTM_EV_BOTTOM20_REJECT" not in tags:
+                tags.append("TTM_EV_BOTTOM20_REJECT")
+
+    dn_ev_rank_v2 = 0.0
+    dn_prop_gate_tier = ""
+    dn_prop_gate_lot_multiplier = 1.0
+    dn_ev_rank = 0.0
+    dn_ev_bucket = ""
+    if (
+        setup_type == DINAPOLI_SETUP_TYPE
+        and prop_gate_enabled()
+        and not is_reject
+        and lot_factor > 0.0
+        and isinstance(setup, DiNapoliSetup)
+    ):
+        m15_df = gbp_df if uses_primary_dataframe(setup.pair) else eur_df
+        h1_df = h1_gbp if uses_primary_dataframe(setup.pair) else h1_eur
+        h4_df = None
+        if htf_gbp is not None and htf_eur is not None:
+            h4_df = htf_gbp if uses_primary_dataframe(setup.pair) else htf_eur
+        gate_row = score_dn_prop_gate_from_setup(
+            setup=setup,
+            trade_id=trade_id,
+            decision_source=decision_source,
+            llm_confidence=llm_confidence_score,
+            llm_reason=llm_reason_summary,
+            minutes_to_news=minutes_to_news,
+            m15_df=m15_df,
+            h1_df=h1_df,
+            h4_df=h4_df,
+        )
+        dn_ev_rank_v2 = float(gate_row.get("ev_rank_v2", 0.0))
+        dn_prop_gate_tier = str(gate_row.get("dn_prop_gate_tier", ""))
+        dn_prop_gate_lot_multiplier = float(gate_row.get("dn_prop_gate_lot_multiplier", 1.0))
+        dn_ev_rank = dn_ev_rank_v2
+        dn_ev_bucket = dn_prop_gate_tier
+        lot_factor = round(lot_factor * dn_prop_gate_lot_multiplier, 4)
+        lot_factor = audit_rm.apply_lot_factor_floor(lot_factor)
+        base_risk_pct = dn_prop_gate_base_risk_frac()
+        risk_budget = round(equity_snapshot * base_risk_pct * lot_factor, 2)
+        lot_size = audit_rm.lot_from_risk_budget(
+            risk_budget, sl_distance, lot_factor
+        )
+        if "DN_PROP_GATE" not in tags:
+            tags.append("DN_PROP_GATE")
+        if dn_prop_gate_tier == "Top5" and "DN_PROP_TOP5" not in tags:
+            tags.append("DN_PROP_TOP5")
+        elif dn_prop_gate_tier == "Top10" and "DN_PROP_TOP10" not in tags:
+            tags.append("DN_PROP_TOP10")
+        elif dn_prop_gate_tier == "Top20" and "DN_PROP_TOP20" not in tags:
+            tags.append("DN_PROP_TOP20")
+        elif dn_prop_gate_tier == "Middle" and "DN_PROP_MIDDLE" not in tags:
+            tags.append("DN_PROP_MIDDLE")
+        elif dn_prop_gate_tier == "Low" and "DN_PROP_LOW" not in tags:
+            tags.append("DN_PROP_LOW")
+
     trade_risk_pct = compute_trade_risk_pct(base_risk_pct, lot_factor)
     if not is_reject and trade_risk_pct > 0.0 and not defense_pure:
         if account.would_exceed_daily_exposure(trade_risk_pct):
@@ -2434,6 +2766,17 @@ def _evaluate_setup_at_timestamp(
             account.register_mutual_exclusion_execution(
                 setup.timestamp, setup.pair, setup_type
             )
+        if lgr_baseline:
+            from archive.lgr.lgr_prop_controls import lgr_max_open_positions
+            from strategies.archive.liquidity_grab_reversal import LGR_EXEC_BAR_MINUTES, MAX_HOLDING_BARS
+
+            if lgr_max_open_positions() is not None:
+                account.register_open_position(
+                    setup.timestamp,
+                    setup.pair,
+                    setup_type,
+                    MAX_HOLDING_BARS * LGR_EXEC_BAR_MINUTES,
+                )
         # concurrent: L5 確定後に register_executed_position で動的登録（Phase-1 固定暫定なし）
 
     pair_df = gbp_df if uses_primary_dataframe(setup.pair) else eur_df
@@ -2500,6 +2843,19 @@ def _evaluate_setup_at_timestamp(
         fvg_final_lot_factor=fvg_final_lot_factor,
         cspa_gate_reason=cspa_gate_reason,
         cspa_tp_multiplier=cspa_tp_multiplier,
+        lgr_bayes_regime=lgr_bayes_regime,
+        lgr_bayes_reason=lgr_bayes_reason,
+        lgr_ev_score=lgr_ev_score,
+        lgr_ev_rank=lgr_ev_rank,
+        lgr_ev_lot_multiplier=lgr_ev_lot_multiplier,
+        ttm_bayes_win_prob=ttm_bayes_win_prob,
+        ttm_ev_rank=ttm_ev_rank,
+        ttm_ev_lot_multiplier=ttm_ev_lot_multiplier,
+        dn_ev_rank=dn_ev_rank,
+        dn_ev_bucket=dn_ev_bucket,
+        dn_ev_rank_v2=dn_ev_rank_v2,
+        dn_prop_gate_tier=dn_prop_gate_tier,
+        dn_prop_gate_lot_multiplier=dn_prop_gate_lot_multiplier,
     )
 
 
@@ -2519,7 +2875,12 @@ def _apply_trade_outcome(
     2ペア目が1ペア目の未来結果を先読みするタイムトラベルは発生しない。
     """
     setup = pending.setup
-    pair_df = gbp_df if uses_primary_dataframe(setup.pair) else eur_df
+    pair_df = pair_dataframe_slot(
+        setup.pair,
+        gbp_df,
+        eur_df,
+        setup_type=pending.setup_type,
+    )
     holding_cap = max_holding_bars if max_holding_bars is not None else MAX_HOLDING_BARS
     sync_invalid = False
     sync_flags: tuple[str, ...] = ()
@@ -2597,6 +2958,10 @@ def _apply_trade_outcome(
                 audit_dd_throttle.register_executed_streak(account, won=False)
             else:
                 audit_dd_throttle.register_executed_streak(account, won=True)
+            account.daily_profit_r = round(
+                float(getattr(account, "daily_profit_r", 0.0) or 0.0) + float(profit_r),
+                4,
+            )
 
             if audit_rm.get_mutual_exclusion_mode() == "concurrent":
                 account.register_executed_position(
@@ -2618,6 +2983,10 @@ def _apply_trade_outcome(
                 audit_dd_throttle.register_executed_streak(account, won=False)
             else:
                 audit_dd_throttle.register_executed_streak(account, won=True)
+            account.daily_profit_r = round(
+                float(getattr(account, "daily_profit_r", 0.0) or 0.0) + float(profit_r),
+                4,
+            )
             if audit_rm.get_mutual_exclusion_mode() == "concurrent":
                 account.register_executed_position(
                     setup.timestamp,
@@ -2689,6 +3058,23 @@ def _apply_trade_outcome(
         "htf_counter_trend": pending.htf_counter_trend,
         "htf_lot_multiplier": round(pending.htf_lot_multiplier, 4),
         "fvg_final_lot_factor": round(pending.fvg_final_lot_factor, 4),
+        "ev_rank": round(
+            pending.dn_ev_rank_v2
+            if isinstance(setup, DiNapoliSetup) and pending.dn_prop_gate_tier
+            else (
+                pending.dn_ev_rank
+                if isinstance(setup, DiNapoliSetup) and pending.dn_ev_bucket
+                else pending.ttm_ev_rank
+            ),
+            6,
+        ),
+        "ev_lot_multiplier": round(
+            pending.dn_prop_gate_lot_multiplier
+            if isinstance(setup, DiNapoliSetup) and pending.dn_prop_gate_tier
+            else pending.ttm_ev_lot_multiplier,
+            4,
+        ),
+        "sized_result_r": round(profit_r, 4),
         "_setup": setup,
         "_pending": pending,
     }

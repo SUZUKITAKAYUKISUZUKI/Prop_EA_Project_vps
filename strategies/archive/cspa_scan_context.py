@@ -9,7 +9,7 @@ from typing import Any
 
 import numpy as np
 
-from strategies.cspa import (
+from strategies.archive.cspa import (
     ATR_PERIOD,
     CSPA_BT_SPREAD_PIPS,
     CSPA_VOLUME_LOOKBACK_BARS,
@@ -31,8 +31,8 @@ from strategies.cspa import (
     classify_dow_phase_maturity,
     _spread_percentile,
 )
-from strategies.cspa_scan_hot import minutes_from_session_open_ns
-from strategies.cspa_arrays import (
+from strategies.archive.cspa_scan_hot import minutes_from_session_open_ns
+from strategies.archive.cspa_arrays import (
     CspaScanArrays,
     OhlcvArrays,
     atr_at_index,
@@ -41,7 +41,7 @@ from strategies.cspa_arrays import (
     compute_atr_np,
     compute_ema_np,
 )
-from strategies.cspa_scan_hot import (
+from strategies.archive.cspa_scan_hot import (
     HtfDirectionCache,
     breakout_momentum_ratio_np,
     compute_adr_pair_np,
@@ -172,7 +172,7 @@ def build_cspa_bayes_features_np(
     vp_location_score: int,
     trigger_bar_index: int,
 ) -> CspaBayesFeatures:
-    from strategies.cspa import DEFAULT_RISK_REWARD
+    from strategies.archive.cspa import DEFAULT_RISK_REWARD
     from strategies.market_utils import pip_size_for_pair
 
     trade_dir: TradeDirection = "BUY" if bias_phase == "UPTREND" else "SELL"

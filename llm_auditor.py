@@ -129,6 +129,7 @@ class LLMCacheCoverageStats:
 
 _cache_coverage_stats = LLMCacheCoverageStats()
 _track_cache_coverage = False
+_llm_cache_miss_sink: list[dict[str, Any]] | None = None
 
 GEMINI_ASSIGNABLE_TAGS: tuple[str, ...] = (
     "NO_BOS",
@@ -617,6 +618,12 @@ def enable_cache_coverage_tracking(enabled: bool = True) -> None:
 def reset_cache_coverage_stats() -> None:
     global _cache_coverage_stats
     _cache_coverage_stats = LLMCacheCoverageStats()
+
+
+def enable_cache_miss_collection(sink: list[dict[str, Any]] | None) -> None:
+    """readonly キャッシュミス時に candidate_row を sink へ追記（増分 batch audit 用）。"""
+    global _llm_cache_miss_sink
+    _llm_cache_miss_sink = sink
 
 
 def get_cache_coverage_stats() -> LLMCacheCoverageStats:
@@ -1765,6 +1772,8 @@ class AuditAuditor:
                 "LLM cache miss for %s — strategy_edge fallback (run batch_llm_audit.py first)",
                 make_cache_key(trade_context),
             )
+            if _llm_cache_miss_sink is not None:
+                _llm_cache_miss_sink.append(candidate_row_from_context(trade_context))
             parsed = self._extract_json_object(self._strategy_edge_mock(trade_context)[0])
             result = self._build_ok_result(trade_context, parsed, 0, llm_status="cache_miss_fallback")
             _record_cache_coverage("cache_miss_fallback")

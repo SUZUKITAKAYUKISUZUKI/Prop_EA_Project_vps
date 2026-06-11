@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Literal
 
-from strategies.cspa import (
+from strategies.archive.cspa import (
     CSPA_BE_ARM_MFE_R,
     CSPA_BE_BUFFER_ATR,
     CSPA_BE_ENABLED,

@@ -168,6 +168,11 @@ CHALLENGE_BASE_RISK_PCT_MAX = float(os.getenv("CHALLENGE_BASE_RISK_PCT_MAX", "0.
 CHALLENGE_BASE_RISK_PCT_MIN = 0.005  # +8% 付近
 FUNDED_BASE_RISK_PCT = 0.010        # Funded 固定 1.0%
 
+
+def challenge_base_risk_pct_max() -> float:
+    """Runtime read so BT/WFT can override via CHALLENGE_BASE_RISK_PCT_MAX env."""
+    return float(os.getenv("CHALLENGE_BASE_RISK_PCT_MAX", "0.025"))
+
 PROFILE_L2_MIN_SCORE: dict[str, int] = {"challenge": 30, "funded": 30}  # v3.4 仕様変更テスト: Challenge も 30
 PROFILE_BAYES_ALLOW: dict[str, float] = {"challenge": 0.48, "funded": 0.55}
 PROFILE_LLM_CAUTION_MULT: dict[str, float] = {"challenge": 0.5, "funded": 0.25}
@@ -265,7 +270,7 @@ def pure_bt_flat_base_risk_pct(profile: str) -> float:
     prof = normalize_profile(profile)
     if prof == "funded":
         return FUNDED_BASE_RISK_PCT
-    return CHALLENGE_BASE_RISK_PCT_MAX
+    return challenge_base_risk_pct_max()
 
 
 def effective_base_risk_pct(
@@ -283,14 +288,15 @@ def effective_base_risk_pct(
     if prof == "funded":
         return FUNDED_BASE_RISK_PCT
 
+    max_risk = challenge_base_risk_pct_max()
     profit_pct = challenge_profit_progress_pct(phase_start_equity, current_equity)
     if profit_pct >= CHALLENGE_PROFIT_TARGET_PCT:
         return CHALLENGE_BASE_RISK_PCT_MIN
 
     ratio = profit_pct / CHALLENGE_PROFIT_TARGET_PCT
-    span = CHALLENGE_BASE_RISK_PCT_MAX - CHALLENGE_BASE_RISK_PCT_MIN
-    risk = CHALLENGE_BASE_RISK_PCT_MAX - span * ratio
-    return max(CHALLENGE_BASE_RISK_PCT_MIN, min(CHALLENGE_BASE_RISK_PCT_MAX, risk))
+    span = max_risk - CHALLENGE_BASE_RISK_PCT_MIN
+    risk = max_risk - span * ratio
+    return max(CHALLENGE_BASE_RISK_PCT_MIN, min(max_risk, risk))
 
 
 def multiplier_daily_dd(current_daily_loss_pct: float) -> float:
@@ -505,6 +511,7 @@ class AccountState:
     consecutive_losses: int = 0
     consecutive_wins: int = 0
     daily_consecutive_losses: int = 0
+    daily_profit_r: float = 0.0
     recovery_boost_armed: bool = False
     trade_counter: int = 0
     last_event_timestamp: Any = None
@@ -682,6 +689,7 @@ class AccountState:
             self.current_day = day
             self.daily_start_equity = self.equity
             self.daily_consecutive_losses = 0
+            self.daily_profit_r = 0.0
             if get_mutual_exclusion_mode() == "daily":
                 self.daily_pair_executed_setup.clear()
             self.reset_daily_exposure_if_new_day(ts)

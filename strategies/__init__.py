@@ -8,57 +8,54 @@ from strategies.base import StrategyResult
 from strategies.base_strategy import BaseStrategy
 from strategies.htf_trend_analyzer import HtfTrendResult, TrendDirection, analyze_htf_trend, is_counter_trend
 from strategies.london_sweep_failure import LsfcSetup, LondonSweepFailureStrategy
-from strategies.cspa import (
-    CSPA_PAIR_PRIMARY,
-    CSPA_PAIR_SECONDARY,
-    CspaSetup,
-    CspaStrategy,
-    STRATEGY_FULL_NAME as CSPA_FULL_NAME,
+from strategies.ttm import (
+    STRATEGY_ABBREV as TTM_ABBREV,
+    STRATEGY_FULL_NAME as TTM_FULL_NAME,
+    TTM_PAIR_PRIMARY,
+    TtmSetup,
+    TtmStrategy,
 )
-from strategies.liquidity_grab_reversal import (
-    LGR_PAIR_PRIMARY,
-    LGR_PAIR_SECONDARY,
-    LgrSetup,
-    STRATEGY_ABBREV as LGR_ABBREV,
-    STRATEGY_FULL_NAME as LGR_FULL_NAME,
-    LiquidityGrabReversalStrategy,
+from strategies.dinapoli import (
+    STRATEGY_ABBREV as DINAPOLI_ABBREV,
+    STRATEGY_FULL_NAME as DINAPOLI_FULL_NAME,
+    DiNapoliSetup,
+    DiNapoliStrategy,
 )
-
 StrategyModeKey = Literal[
-    "lsfc", "als", "fvg", "tref", "vexp", "dtpa", "cspa", "wyckoff", "lgr",
-    "continuation", "main", "all", "abc", "abcd",
+    "lsfc", "als", "fvg", "tref", "vexp", "dtpa", "cspa", "wyckoff", "lgr", "ttm", "dinapoli",
+    "continuation", "main", "all", "ac", "abc", "abcd", "abcdn",
 ]
 
 # 実運用 (MT5 Bridge) で発注可能な mode — A～Z letter 割当のみ。
 STRATEGY_LETTER_BY_MODE: dict[str, str] = {
     "lsfc": "A",
-    "cspa": "B",
+    "dinapoli": "C",
 }
-# C, D — 未割当（旧 FVG / TREF。アーカイブ）
+# B — cspa (CSPA): アーカイブ — 検証の結果、プロップ用ポートフォリオには向いていない
+# D — ttm: 仲値流動性イベント特徴量収集（執行 M1 / 構造 M5 / ATR M15）
 # H — wyckoff (WR): アーカイブ — 新戦略 Liquidity Grab Reversal (LGR) 構築に向けての発展的廃止
-# 旧 WS は archive/wyckoff_spring.py — 戦略に優位性が無いことが判明したから
-# I — lgr (LGR): BT/WFT のみ（letter 未割当）
+# I — lgr (LGR): アーカイブ — プロップ向きでない（自己資金口座向けに優秀）
 
 STRATEGY_ABBREV_BY_MODE: dict[str, str] = {
     "lsfc": "LSFC",
-    "cspa": "CSPA",
-    "lgr": LGR_ABBREV,
+    "ttm": TTM_ABBREV,
+    "dinapoli": DINAPOLI_ABBREV,
 }
 
 STRATEGY_FULL_NAME_BY_MODE: dict[str, str] = {
-    "cspa": CSPA_FULL_NAME,
-    "lgr": LGR_FULL_NAME,
+    "ttm": TTM_FULL_NAME,
+    "dinapoli": DINAPOLI_FULL_NAME,
 }
 
 STRATEGY_PRIORITY_ORDER: tuple[str, ...] = (
-    "lsfc", "cspa", "lgr",
+    "lsfc", "ttm", "dinapoli",
 )
 
 # (mode_key, strategy class) — archive 外の全実装。BT 用。
 STRATEGY_CLASS_REGISTRY: tuple[tuple[str, type[BaseStrategy]], ...] = (
     ("lsfc", LondonSweepFailureStrategy),
-    ("cspa", CspaStrategy),
-    ("lgr", LiquidityGrabReversalStrategy),
+    ("ttm", TtmStrategy),
+    ("dinapoli", DiNapoliStrategy),
 )
 
 MODE_BY_STRATEGY_CLASS: dict[type[BaseStrategy], str] = {
@@ -68,7 +65,7 @@ MODE_BY_STRATEGY_CLASS: dict[type[BaseStrategy], str] = {
 DEPRECATED_STRATEGY_MODES: frozenset[str] = frozenset()
 
 ARCHIVED_STRATEGY_MODES: frozenset[str] = frozenset(
-    {"als", "dtpa", "vexp", "continuation", "tref", "fvg", "wyckoff"}
+    {"als", "dtpa", "vexp", "continuation", "tref", "fvg", "wyckoff", "lgr", "cspa"}
 )
 
 PRODUCTION_STRATEGY_MODE: StrategyModeKey = "lsfc"
@@ -94,6 +91,21 @@ def resolve_strategy_mode(strategy: BaseStrategy) -> str:
     raise ValueError(f"Unknown strategy instance: {type(strategy).__name__}")
 
 
+PORTFOLIO_AC_MODES: frozenset[str] = frozenset({"ac"})
+PORTFOLIO_ABC_MODES: frozenset[str] = frozenset({"abc", "abcd", "abcdn"})
+MTF_PORTFOLIO_MODES: frozenset[str] = PORTFOLIO_AC_MODES | PORTFOLIO_ABC_MODES
+
+
+def is_mtf_portfolio_mode(mode: str) -> bool:
+    """True for shared-equity portfolio BT/WFT selectors (A+C production portfolio)."""
+    return mode in MTF_PORTFOLIO_MODES
+
+
+def portfolio_includes_dinapoli(mode: str) -> bool:
+    """True when portfolio selector expands to lsfc + dinapoli."""
+    return mode in (PORTFOLIO_ABC_MODES | PORTFOLIO_AC_MODES)
+
+
 def expand_strategy_modes(
     strategies: StrategyModeKey | tuple[StrategyModeKey, ...] | str,
 ) -> tuple[str, ...]:
@@ -106,8 +118,8 @@ def expand_strategy_modes(
             expanded.append("lsfc")
         elif item == "all":
             expanded.append("lsfc")
-        elif item in ("abc", "abcd"):
-            expanded.extend(["lsfc", "cspa"])
+        elif item in (PORTFOLIO_AC_MODES | PORTFOLIO_ABC_MODES):
+            expanded.extend(["lsfc", "dinapoli"])
         else:
             expanded.append(item)
     return tuple(expanded)
@@ -158,17 +170,14 @@ __all__ = [
     "STRATEGY_PRIORITY_ORDER",
     "StrategyModeKey",
     "TrendDirection",
-    "CSPA_FULL_NAME",
-    "CSPA_PAIR_PRIMARY",
-    "CSPA_PAIR_SECONDARY",
-    "CspaSetup",
-    "CspaStrategy",
-    "LGR_PAIR_PRIMARY",
-    "LGR_PAIR_SECONDARY",
-    "LGR_ABBREV",
-    "LGR_FULL_NAME",
-    "LgrSetup",
-    "LiquidityGrabReversalStrategy",
+    "TTM_PAIR_PRIMARY",
+    "TTM_ABBREV",
+    "TTM_FULL_NAME",
+    "TtmSetup",
+    "TtmStrategy",
+    "DiNapoliSetup",
+    "DiNapoliStrategy",
+    "DINAPOLI_FULL_NAME",
     "LondonSweepFailureStrategy",
     "analyze_htf_trend",
     "expand_strategy_modes",
@@ -176,6 +185,11 @@ __all__ = [
     "get_registered_strategies",
     "is_counter_trend",
     "is_live_strategy_mode",
+    "is_mtf_portfolio_mode",
+    "MTF_PORTFOLIO_MODES",
+    "PORTFOLIO_ABC_MODES",
+    "PORTFOLIO_AC_MODES",
+    "portfolio_includes_dinapoli",
     "resolve_strategy_mode",
     "strategy_priority_index",
 ]

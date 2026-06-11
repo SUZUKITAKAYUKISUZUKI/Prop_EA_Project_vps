@@ -9,11 +9,11 @@ from typing import Any, Callable
 
 import numpy as np
 
-from strategies.cspa_arrays import years_from_datetime_ns
+from strategies.archive.cspa_arrays import years_from_datetime_ns
 
 from strategies.bt_scan_parallel import parallel_map_pairs as _parallel_map_pairs
 from strategies.bt_scan_parallel import scan_parallel_jobs
-from strategies.cspa_scan_engine import scan_parallel_years_enabled
+from strategies.archive.cspa_scan_engine import scan_parallel_years_enabled
 
 logger = logging.getLogger(__name__)
 

@@ -13,8 +13,8 @@ import numpy as np
 
 from strategies.bt_l5 import compute_trade_excursions_np
 from strategies.bt_ohlcv import OhlcvArrays, asof_end_index, slice_arrays, ts_ns_to_pd
-from strategies.cspa_arrays import atr_at_index, compute_atr_np
-from strategies.cspa_scan_hot import (
+from strategies.archive.cspa_arrays import atr_at_index, compute_atr_np
+from strategies.archive.cspa_scan_hot import (
     HtfDirectionCache,
     minutes_from_session_open_ns,
     resolve_cspa_session_type_ns,

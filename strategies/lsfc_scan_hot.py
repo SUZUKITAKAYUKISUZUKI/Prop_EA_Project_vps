@@ -10,7 +10,7 @@ from typing import Callable
 import numpy as np
 
 from strategies.bt_ohlcv import resolve_bar_position_np, ts_ns_to_pd
-from strategies.cspa_arrays import OhlcvArrays, atr_at_index, compute_atr_np
+from strategies.archive.cspa_arrays import OhlcvArrays, atr_at_index, compute_atr_np
 from strategies.london_sweep_failure import (
     MIN_RR,
     PIP_SIZE,

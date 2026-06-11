@@ -99,9 +99,21 @@ def is_daily_stop_active(account: Any) -> bool:
 
     TREF は 1 日最大 2 セットアップのため daily>=2 単体では発火しにくい。
     当日 1 敗 + グローバル N 連敗 + DD caution 以上で 2 件目を遮断する。
+
+    LGR Prop Optuna: LGR_DAILY_STOP_R が設定されていれば当日累積 R でも停止。
     """
     if not is_daily_stop_enabled():
         return False
+    try:
+        from archive.lgr.lgr_prop_controls import lgr_daily_stop_r_threshold
+
+        stop_r = lgr_daily_stop_r_threshold()
+        if stop_r is not None:
+            daily_r = float(getattr(account, "daily_profit_r", 0.0) or 0.0)
+            if daily_r <= stop_r:
+                return True
+    except ImportError:
+        pass
     threshold = daily_stop_consecutive_losses()
     daily_streak = int(getattr(account, "daily_consecutive_losses", 0) or 0)
     global_streak = int(getattr(account, "consecutive_losses", 0) or 0)

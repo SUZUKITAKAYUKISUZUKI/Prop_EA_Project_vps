@@ -22,6 +22,7 @@ TREF_SETUP_TYPE = "TOKYO_RANGE_EXPANSION_FAILURE"
 WYCKOFF_REVERSAL_SETUP_TYPE = "WYCKOFF_REVERSAL"
 WYCKOFF_SPRING_SETUP_TYPE = "WYCKOFF_SPRING"
 CSPA_SETUP_TYPE = "CSPA"
+TTM_SETUP_TYPE = "TTM_LIQUIDITY_EVENT"
 
 # --- ストラテジー別 L5 ピラミッド既定（コードレベル） ---
 # 環境変数 PYRAMID_<STRATEGY>=0/1 で個別上書き。PYRAMID_ENABLED=0 で全体 OFF。
@@ -33,6 +34,7 @@ PYRAMID_STRATEGY_DEFAULTS: dict[str, bool] = {
     WYCKOFF_REVERSAL_SETUP_TYPE: False,
     WYCKOFF_SPRING_SETUP_TYPE: False,
     CSPA_SETUP_TYPE: True,
+    TTM_SETUP_TYPE: False,
 }
 
 STRATEGY_PYRAMID_ENV_VARS: dict[str, str] = {
@@ -43,6 +45,7 @@ STRATEGY_PYRAMID_ENV_VARS: dict[str, str] = {
     WYCKOFF_REVERSAL_SETUP_TYPE: "PYRAMID_WYCKOFF",
     WYCKOFF_SPRING_SETUP_TYPE: "PYRAMID_WYCKOFF",
     CSPA_SETUP_TYPE: "PYRAMID_CSPA",
+    TTM_SETUP_TYPE: "PYRAMID_TTM",
 }
 
 
@@ -95,6 +98,25 @@ def get_pyramid_strategy_status() -> list[dict[str, Any]]:
             }
         )
     return rows
+
+
+def is_pyramid_enabled_for_pending(pending: Any) -> bool:
+    """
+    PendingEvaluation 単位のピラミッド判定。
+
+    TTMS: TTM_EV_PYRAMID_TOP20=1 かつ ev_rank >= 0.80 (Top 20%) のみ ON。
+    その他: is_pyramid_enabled(setup_type)。
+    """
+    if _env_flag("PYRAMID_ENABLED") is False:
+        return False
+    setup_type = str(getattr(pending, "setup_type", "") or "").strip()
+    if setup_type == TTM_SETUP_TYPE:
+        from strategies.ttm_bayes_ev import is_ttm_top20_ev_rank, is_ttm_top20_pyramid_enabled
+
+        if not is_ttm_top20_pyramid_enabled():
+            return False
+        return is_ttm_top20_ev_rank(float(getattr(pending, "ttm_ev_rank", 0.0) or 0.0))
+    return is_pyramid_enabled(setup_type)
 
 
 def is_pyramid_enabled(setup_type: str | None = None) -> bool:
@@ -509,10 +531,11 @@ def track_with_pyramid(
     daily_dd_remaining_percent: float,
     *,
     setup_type: str | None = None,
+    skip_strategy_enable_check: bool = False,
     **kwargs: Any,
 ) -> PyramidTradeResult:
     """feature_engineering 統合用エントリポイント。"""
-    if not is_pyramid_enabled(setup_type):
+    if not skip_strategy_enable_check and not is_pyramid_enabled(setup_type):
         from main_platform import track_trade_outcome
 
         outcome = track_trade_outcome(

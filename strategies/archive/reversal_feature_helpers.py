@@ -12,7 +12,7 @@ from typing import Literal
 import numpy as np
 import pandas as pd
 
-from strategies.cspa import resolve_cspa_session_type
+from strategies.archive.cspa import resolve_cspa_session_type
 from strategies.market_utils import compute_atr
 
 SessionType = Literal["ASIA", "LONDON", "NY", "OFF_HOURS"]

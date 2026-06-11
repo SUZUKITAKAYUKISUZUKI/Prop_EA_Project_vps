@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING, Any
 import numpy as np
 
 if TYPE_CHECKING:
-    from strategies.cspa import ImpulseLeg, StagnationCluster, TradeDirection
+    from strategies.archive.cspa import ImpulseLeg, StagnationCluster, TradeDirection
 
 _FIB_RETRACE_MAX = float(os.getenv("CSPA_FIB_RETRACE_MAX", "0.618"))
 _STAGNATION_MAX_BODY_ATR = float(os.getenv("CSPA_STAGNATION_MAX_BODY_ATR", "0.35"))
@@ -210,7 +210,7 @@ def detect_stagnation_cluster_np(
     *,
     max_bars: int,
 ) -> StagnationCluster | None:
-    from strategies.cspa import StagnationCluster
+    from strategies.archive.cspa import StagnationCluster
 
     if end_index < 1:
         return None
@@ -309,7 +309,7 @@ def compute_ema_np(close: np.ndarray, span: int) -> np.ndarray:
 
 def build_adr_cache_np(structure: OhlcvArrays):
     """Build ``_StructureAdrCache`` from numpy OHLCV (no pandas)."""
-    from strategies.cspa import CSPA_ADR_LOOKBACK_DAYS, _StructureAdrCache
+    from strategies.archive.cspa import CSPA_ADR_LOOKBACK_DAYS, _StructureAdrCache
 
     dt = structure.datetime_ns.astype("datetime64[ns]")
     day_norm = dt.astype("datetime64[D]")
