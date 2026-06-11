@@ -25,11 +25,10 @@ MAX_DAILY_EXPOSURE_LIMIT_PCT = float(
 PIP_SIZE = 0.0001
 PIP_VALUE_PER_LOT = 10.0
 
-# --- 同ペア戦略間相互排他（L0/L2） ---
-# daily: 同日先着1戦略 / concurrent: 実ポジション [entry, close) のみ遮断（L5 確定 close で動的解放）
-MutualExclusionMode = Literal["daily", "concurrent", "off"]
-REASON_SAME_DAY_PAIR_MUTUAL_EXCLUSION = "SAME_DAY_PAIR_MUTUAL_EXCLUSION"
-REASON_CONCURRENT_PAIR_MUTUAL_EXCLUSION = "CONCURRENT_PAIR_MUTUAL_EXCLUSION"
+# --- 同一シンボル1ポジション制限（L2） ---
+# 実ポジション [entry, close) 区間中は同シンボルへの新規エントリーを遮断（L5 確定後に登録）
+MutualExclusionMode = Literal["one_per_symbol", "off"]
+REASON_SYMBOL_ONE_POSITION_LIMIT = "SYMBOL_ONE_POSITION_LIMIT"
 DECISION_MUTUAL_EXCLUSION_LOCK = "MUTUAL_EXCLUSION_LOCK"
 # 実執行とみなす trade_result（シャドー NOT_EXECUTED は除外）
 EXECUTED_TRADE_RESULTS = frozenset({"WIN", "LOSS", "PENDING", "TIMEOUT"})
@@ -116,24 +115,23 @@ def apply_profit_cushion_brake(
     return lot_factor, risk_budget, lot_size, cushion_mult
 
 
-def get_mutual_exclusion_mode() -> MutualExclusionMode:
-    """MUTUAL_EXCLUSION_MODE=daily|concurrent|off（未設定時 concurrent）。"""
-    mode = os.getenv("MUTUAL_EXCLUSION_MODE", "concurrent").strip().lower()
-    if mode in ("off", "none", "disabled", "0", "false"):
-        return "off"
-    if mode == "daily":
-        return "daily"
-    return "concurrent"
-
-
 def is_mutual_exclusion_enabled() -> bool:
-    return get_mutual_exclusion_mode() != "off"
+    """MUTUAL_EXCLUSION_ENABLED=0 または MUTUAL_EXCLUSION_MODE=off で無効（未設定時 ON）。"""
+    raw = os.getenv("MUTUAL_EXCLUSION_ENABLED", "1").strip().lower()
+    if raw in ("0", "false", "off", "no", "disabled"):
+        return False
+    legacy = os.getenv("MUTUAL_EXCLUSION_MODE", "").strip().lower()
+    if legacy in ("off", "none", "disabled", "0", "false"):
+        return False
+    return True
+
+
+def get_mutual_exclusion_mode() -> MutualExclusionMode:
+    return "one_per_symbol" if is_mutual_exclusion_enabled() else "off"
 
 
 def mutual_exclusion_reason_tag() -> str:
-    if get_mutual_exclusion_mode() == "concurrent":
-        return REASON_CONCURRENT_PAIR_MUTUAL_EXCLUSION
-    return REASON_SAME_DAY_PAIR_MUTUAL_EXCLUSION
+    return REASON_SYMBOL_ONE_POSITION_LIMIT
 
 
 def portfolio_lot_multiplier() -> float:
@@ -153,7 +151,7 @@ def apply_portfolio_lot_multiplier(lot_factor: float) -> float:
 
 @dataclass
 class OpenPosition:
-    """同時保有排他: 実執行ポジションの [entry, close) 区間。"""
+    """同一シンボル1ポジション制限: 実執行ポジションの [entry, close) 区間。"""
 
     pair: str
     setup_type: str
@@ -517,9 +515,7 @@ class AccountState:
     last_event_timestamp: Any = None
     daily_committed_risk_pct: float = 0.0
     last_trade_date: Any = None
-    # (calendar_date, pair) → その日そのペアで先着執行された setup_type（daily モード）
-    daily_pair_executed_setup: dict[tuple[Any, str], str] = field(default_factory=dict)
-    # concurrent モード: 実執行ポジションの保有区間
+    # 実執行ポジションの保有区間（同一シンボル1ポジション制限）
     open_positions: list[OpenPosition] = field(default_factory=list)
 
     def __post_init__(self) -> None:
@@ -555,9 +551,6 @@ class AccountState:
             self.daily_committed_risk_pct = 0.0
             self.last_trade_date = day
 
-    def _calendar_day(self, ts) -> Any:
-        return ts.date() if hasattr(ts, "date") else ts
-
     def _pair_key(self, pair: str) -> str:
         return pair.strip().upper()
 
@@ -568,39 +561,26 @@ class AccountState:
         setup_type: str,
     ) -> tuple[bool, str | None]:
         """
-        daily: 同日・同ペアに別 setup_type の先着執行がある場合 True。
-        concurrent: 同ペアで別 setup_type のアクティブポジションと区間重複時 True。
-        off: 常に False（相互排他なし）。
+        同シンボルにアクティブポジション（entry <= ts < close）がある場合 True。
+        setup_type / 戦略は問わない。off 時は常に False。
         """
+        del setup_type
         if not is_mutual_exclusion_enabled():
             return False, None
-        if get_mutual_exclusion_mode() == "daily":
-            key = (self._calendar_day(ts), self._pair_key(pair))
-            existing = self.daily_pair_executed_setup.get(key)
-            if existing is None or existing == setup_type:
-                return False, None
-            return True, existing
 
         import pandas as pd
 
         self.purge_closed_positions(ts)
         pair_u = self._pair_key(pair)
-        setup_u = setup_type.strip()
         now = pd.Timestamp(ts)
         for pos in self.open_positions:
-            if pos.pair != pair_u or pos.setup_type == setup_u:
+            if pos.pair != pair_u:
                 continue
             entry = pd.Timestamp(pos.entry_ts)
             close = pd.Timestamp(pos.close_ts)
             if entry <= now < close:
                 return True, pos.setup_type
         return False, None
-
-    def register_mutual_exclusion_execution(self, ts, pair: str, setup_type: str) -> None:
-        """daily モード: 当日・当ペアの支配戦略を記録（先着のみ）。"""
-        key = (self._calendar_day(ts), self._pair_key(pair))
-        if key not in self.daily_pair_executed_setup:
-            self.daily_pair_executed_setup[key] = setup_type
 
     def register_open_position(
         self,
@@ -609,7 +589,7 @@ class AccountState:
         setup_type: str,
         holding_minutes: int,
     ) -> None:
-        """concurrent モード: 実執行ポジションの [entry, close) を登録。"""
+        """実執行ポジションの [entry, close) を登録。"""
         import pandas as pd
 
         entry = pd.Timestamp(ts)
@@ -631,9 +611,7 @@ class AccountState:
         holding_minutes: int,
     ) -> None:
         """
-        L5 確定後: 実際のクローズ時刻（SL/TP/タイムアウト）で相互排他区間を登録。
-
-        concurrent モードでは Phase-1 の固定暫定区間を使わず、
+        L5 確定後: 実際のクローズ時刻（SL/TP/タイムアウト）で保有区間を登録。
         close_ts 到達時に purge_closed_positions で即時解放される。
         """
         import pandas as pd
@@ -690,8 +668,6 @@ class AccountState:
             self.daily_start_equity = self.equity
             self.daily_consecutive_losses = 0
             self.daily_profit_r = 0.0
-            if get_mutual_exclusion_mode() == "daily":
-                self.daily_pair_executed_setup.clear()
             self.reset_daily_exposure_if_new_day(ts)
         self.purge_closed_positions(ts)
         if self.current_month != month:
@@ -761,35 +737,17 @@ def check_mutual_exclusion_from_records(
     setup_type: str,
 ) -> tuple[bool, str | None]:
     """
-    バックテスト records から相互排他を走査（AccountState と同じモード）。
-
-    daily: 同日・同ペアの先着 setup_type。
-    concurrent: シグナル時点で区間重複する別 setup_type の実執行。
-    off: 常に False。
+    バックテスト records から同一シンボル1ポジション制限を走査。
+    シグナル時点で区間重複する実執行があれば True（setup_type 不問）。
     """
+    del setup_type
     if not is_mutual_exclusion_enabled():
         return False, None
 
     import pandas as pd
 
     pair_u = pair.strip().upper()
-    setup_u = setup_type.strip()
     signal = pd.Timestamp(signal_ts)
-
-    if get_mutual_exclusion_mode() == "daily":
-        day_str = signal.strftime("%Y-%m-%d")
-        for rec in records:
-            ts_raw = str(rec.get("timestamp", ""))
-            if not ts_raw.startswith(day_str):
-                continue
-            if str(rec.get("pair", "")).upper() != pair_u:
-                continue
-            if not is_executed_trade_result(str(rec.get("trade_result", ""))):
-                continue
-            existing = str(rec.get("setup_type", ""))
-            if existing and existing != setup_u:
-                return True, existing
-        return False, None
 
     for rec in records:
         if str(rec.get("pair", "")).upper() != pair_u:
@@ -797,7 +755,7 @@ def check_mutual_exclusion_from_records(
         if not is_executed_trade_result(str(rec.get("trade_result", ""))):
             continue
         existing = str(rec.get("setup_type", ""))
-        if not existing or existing == setup_u:
+        if not existing:
             continue
         entry = pd.Timestamp(rec.get("timestamp"))
         holding = int(rec.get("holding_time", 0) or 0)

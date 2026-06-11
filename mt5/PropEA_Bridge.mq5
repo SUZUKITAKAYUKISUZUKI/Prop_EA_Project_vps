@@ -148,6 +148,38 @@ string BuildMarketBlock(const string symbol, const ENUM_TIMEFRAMES tf)
 }
 
 //+------------------------------------------------------------------+
+string BuildOpenPositionsJson()
+{
+   string json = ",\"open_positions\":[";
+   bool first = true;
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   {
+      ulong ticket = PositionGetTicket(i);
+      if(ticket == 0)
+         continue;
+      if(!PositionSelectByTicket(ticket))
+         continue;
+      if(PositionGetInteger(POSITION_MAGIC) != (long)InpMagic)
+         continue;
+
+      string pair = CanonicalPair(PositionGetString(POSITION_SYMBOL));
+      if(pair != "EURUSD" && pair != "GBPUSD")
+         continue;
+
+      if(!first)
+         json += ",";
+      first = false;
+      json += StringFormat(
+         "{\"pair\":\"%s\",\"entry_time\":\"%s\"}",
+         JsonEscape(pair),
+         FormatBarTime((datetime)PositionGetInteger(POSITION_TIME))
+      );
+   }
+   json += "]";
+   return json;
+}
+
+//+------------------------------------------------------------------+
 string BuildRequestJson(const string symbol, const ENUM_TIMEFRAMES tf)
 {
    MqlRates rates[];
@@ -178,6 +210,8 @@ string BuildRequestJson(const string symbol, const ENUM_TIMEFRAMES tf)
    json += StringFormat(",\"server_time\":\"%s\"", FormatBarTime(TimeCurrent()));
    json += StringFormat(",\"spread_points\":%d", (int)spread_pts);
    json += StringFormat(",\"bars\":%s", bars_json);
+
+   json += BuildOpenPositionsJson();
 
    if(InpSendCorrelatedPair && g_correlated_symbol != "")
    {

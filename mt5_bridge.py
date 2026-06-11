@@ -51,6 +51,12 @@ class AccountPayload(BaseModel):
     balance: float
 
 
+class OpenPositionPayload(BaseModel):
+    pair: str
+    entry_time: str | None = None
+    setup_type: str | None = None
+
+
 class BarPayload(BaseModel):
     time: str
     open: float
@@ -71,6 +77,7 @@ class TradeSignalRequest(BaseModel):
     correlated_market: MarketPayload | None = None
     correlated_bar_time: str | None = None
     correlated_bars: list[BarPayload] | None = None
+    open_positions: list[OpenPositionPayload] | None = None
 
 
 class SentinelTickRequest(BaseModel):
@@ -207,6 +214,8 @@ def _request_to_dict(request: TradeSignalRequest) -> dict[str, Any]:
         payload["correlated_market"] = request.correlated_market.model_dump()
     if request.correlated_bars:
         payload["correlated_bars"] = [b.model_dump() for b in request.correlated_bars]
+    if request.open_positions:
+        payload["open_positions"] = [p.model_dump(exclude_none=True) for p in request.open_positions]
     return payload
 
 

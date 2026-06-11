@@ -19,7 +19,18 @@ DN_PROP_GATE_BASE_RISK_PCT=0.006
 PROFIT_CUSHION_ENABLED=1
 TWIN_BRAKE_ENABLED=1
 DD_THROTTLING_ENABLED=1
+MUTUAL_EXCLUSION_ENABLED=1
 ```
+
+## L2 — 同一シンボル1ポジション（VPS 本番）
+
+| 層 | 動作 |
+|---|---|
+| **Python L2** | `open_positions` 同期 + `MUTUAL_EXCLUSION_LOCK`（LSFC / DiNapoli 不問） |
+| **MT5 EA** | `HasOpenPosition(symbol)` — 二重安全弁 |
+| **Bridge JSON** | 毎リクエスト `open_positions[]` を送信（`PropEA_Bridge.mq5`） |
+
+`MUTUAL_EXCLUSION_MODE=daily` / `concurrent` は **廃止**。VPS `.env` から削除してください。
 
 ## 同梱ファイル（DiNapoli Prop Gate）
 

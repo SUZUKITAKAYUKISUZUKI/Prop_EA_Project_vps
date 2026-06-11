@@ -419,8 +419,7 @@ PURE_BT_FORBIDDEN_TAGS = frozenset(
         audit_dd_throttle.REASON_DD_THROTTLING_QUARTER,
         audit_dd_throttle.REASON_RECOVERY_BOOST,
         audit_dd_throttle.REASON_DAILY_STOP,
-        audit_rm.REASON_SAME_DAY_PAIR_MUTUAL_EXCLUSION,
-        audit_rm.REASON_CONCURRENT_PAIR_MUTUAL_EXCLUSION,
+        audit_rm.REASON_SYMBOL_ONE_POSITION_LIMIT,
         "TWIN_BRAKE_PROXIMITY",
         "TWIN_BRAKE_DAILY",
         "TWIN_BRAKE_DAILY_HARD_STOP",
@@ -1899,10 +1898,9 @@ def _build_mutual_exclusion_reject_pending(
     blocking_setup_type: str,
 ) -> PendingEvaluation:
     """
-    L2 層: 同ペア戦略間相互排他ロック。
+    L2 層: 同一シンボル1ポジション制限。
 
-    concurrent: アクティブポジション保有中の別 setup_type を遮断。
-    daily: 当日先着 setup_type 以外を遮断。
+    アクティブポジション保有中（entry <= ts < close）は同シンボルへの新規エントリーを遮断。
     """
     pair_df = gbp_df if uses_primary_dataframe(setup.pair) else eur_df
     start_idx = _resolve_track_start_index(pair_df, setup)
@@ -1967,7 +1965,7 @@ def _evaluate_setup_at_timestamp(
 
     v3.2: L3.5 ベイズ（ハード拒否）→ L4 LLM → L3.5 降格の順。ベイズ REJECT 時は LLM 未呼び出し。
     v3.4: L0 当日累積エクスポージャー上限 — 超過時は L1〜L4 をスキップして REJECT。
-    v3.4: 同ペア戦略間相互排他 — daily=当日先着 / concurrent=同時保有（v3.8 デフォルト）。
+    v3.4: 同一シンボル1ポジション制限 — L5 確定区間と重複 → MUTUAL_EXCLUSION_LOCK。
     """
     trade_id = account.next_trade_id(setup.timestamp)
     streak_snapshot = account.consecutive_losses
@@ -2761,11 +2759,6 @@ def _evaluate_setup_at_timestamp(
 
     if not is_reject and lot_size > 0.0 and lot_factor > 0.0:
         account.commit_daily_risk(trade_risk_pct)
-        mode = audit_rm.get_mutual_exclusion_mode()
-        if mode == "daily":
-            account.register_mutual_exclusion_execution(
-                setup.timestamp, setup.pair, setup_type
-            )
         if lgr_baseline:
             from archive.lgr.lgr_prop_controls import lgr_max_open_positions
             from strategies.archive.liquidity_grab_reversal import LGR_EXEC_BAR_MINUTES, MAX_HOLDING_BARS
@@ -2777,7 +2770,7 @@ def _evaluate_setup_at_timestamp(
                     setup_type,
                     MAX_HOLDING_BARS * LGR_EXEC_BAR_MINUTES,
                 )
-        # concurrent: L5 確定後に register_executed_position で動的登録（Phase-1 固定暫定なし）
+        # L5 確定後に register_executed_position で区間登録
 
     pair_df = gbp_df if uses_primary_dataframe(setup.pair) else eur_df
     start_idx = _resolve_track_start_index(pair_df, setup)
@@ -2963,7 +2956,7 @@ def _apply_trade_outcome(
                 4,
             )
 
-            if audit_rm.get_mutual_exclusion_mode() == "concurrent":
+            if audit_rm.is_mutual_exclusion_enabled():
                 account.register_executed_position(
                     setup.timestamp,
                     setup.pair,
@@ -2987,7 +2980,7 @@ def _apply_trade_outcome(
                 float(getattr(account, "daily_profit_r", 0.0) or 0.0) + float(profit_r),
                 4,
             )
-            if audit_rm.get_mutual_exclusion_mode() == "concurrent":
+            if audit_rm.is_mutual_exclusion_enabled():
                 account.register_executed_position(
                     setup.timestamp,
                     setup.pair,
@@ -3458,6 +3451,9 @@ def print_l7_report(records: list[dict[str, Any]]) -> None:
 # Live API — MT5 Bridge 連携 (v1.7+)
 # =============================================================================
 LIVE_BAR_BUFFER_MAX = 600
+BROKER_POSITION_SETUP_TYPE = "BROKER_POSITION"
+BROKER_POSITION_HORIZON = pd.Timedelta(days=365)
+LIVE_EXEC_BAR_MINUTES = 5  # PropEA_Bridge.mq5 uses PERIOD_M5
 
 
 def normalize_pair_name(raw: str) -> str | None:
@@ -3574,6 +3570,49 @@ def sync_live_account(
     account.update_calendar(calendar_ts)
     account.equity = float(equity)
     _ = balance  # Sentinel / 将来の証拠金チェック用
+
+
+def sync_broker_open_positions(
+    account: AccountState,
+    broker_positions: list[dict[str, Any]] | None,
+    ts: pd.Timestamp,
+) -> None:
+    """
+    Live VPS: MT5 から送られた open_positions を L2 同一シンボル1ポジション制限へ同期。
+
+    ブローカー実保有が正。リストが空なら open_positions をクリアする。
+    """
+    if not audit_rm.is_mutual_exclusion_enabled():
+        return
+    account.purge_closed_positions(ts)
+    if not broker_positions:
+        account.open_positions.clear()
+        return
+
+    synced: list[audit_rm.OpenPosition] = []
+    seen: set[str] = set()
+    for item in broker_positions:
+        if not isinstance(item, dict):
+            continue
+        pair = normalize_pair_name(str(item.get("pair", "")))
+        if pair is None or pair in seen:
+            continue
+        seen.add(pair)
+        entry_raw = item.get("entry_time") or item.get("entry_ts")
+        try:
+            entry = pd.Timestamp(entry_raw) if entry_raw else ts
+        except (TypeError, ValueError):
+            entry = ts
+        setup_type = str(item.get("setup_type") or BROKER_POSITION_SETUP_TYPE).strip()
+        synced.append(
+            audit_rm.OpenPosition(
+                pair=pair,
+                setup_type=setup_type,
+                entry_ts=entry,
+                close_ts=ts + BROKER_POSITION_HORIZON,
+            )
+        )
+    account.open_positions = synced
 
 
 def _pair_dataframes(
@@ -3791,6 +3830,11 @@ def evaluate_trade_signal_with_pending(
         balance=balance,
         bar_timestamp=bar_timestamp,
         server_timestamp=server_timestamp,
+    )
+    sync_broker_open_positions(
+        state.account,
+        payload.get("open_positions"),
+        server_timestamp,
     )
 
     if is_live_sentinel_enabled():
