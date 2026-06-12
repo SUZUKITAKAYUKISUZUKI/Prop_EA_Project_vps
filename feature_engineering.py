@@ -150,7 +150,7 @@ def _apply_trade_outcome(
         else:
             audit_dd_throttle.register_executed_streak(account, won=True)
 
-        if audit_rm.is_mutual_exclusion_enabled():
+        if audit_rm.is_mutual_exclusion_enabled(pending.setup_type):
             account.register_executed_position(
                 setup.timestamp,
                 setup.pair,

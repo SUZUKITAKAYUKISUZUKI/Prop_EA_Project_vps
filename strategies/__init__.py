@@ -21,6 +21,12 @@ from strategies.dbbs import (
     DbbsSetup,
     DbbsStrategy,
 )
+from strategies.lbo import (
+    STRATEGY_ABBREV as LBO_ABBREV,
+    STRATEGY_FULL_NAME as LBO_FULL_NAME,
+    LboSetup,
+    LboStrategy,
+)
 from strategies.dinapoli import (
     STRATEGY_ABBREV as DINAPOLI_ABBREV,
     STRATEGY_FULL_NAME as DINAPOLI_FULL_NAME,
@@ -28,8 +34,8 @@ from strategies.dinapoli import (
     DiNapoliStrategy,
 )
 StrategyModeKey = Literal[
-    "lsfc", "als", "fvg", "tref", "vexp", "dtpa", "cspa", "wyckoff", "lgr", "ttm", "dbbs", "dinapoli",
-    "continuation", "main", "all", "ac", "abc", "abcd", "abcdn",
+    "lsfc", "als", "fvg", "tref", "vexp", "dtpa", "cspa", "wyckoff", "lgr", "ttm", "dbbs", "dinapoli", "lbo",
+    "continuation", "main", "all", "ab", "ac", "bc", "abc", "abcd", "abcdn",
 ]
 
 # 実運用 (MT5 Bridge) で発注可能な mode — A～Z letter 割当のみ。
@@ -37,6 +43,14 @@ STRATEGY_LETTER_BY_MODE: dict[str, str] = {
     "lsfc": "A",
     "dbbs": "B",
     "dinapoli": "C",
+}
+STRATEGY_LETTER_BY_SETUP_TYPE: dict[str, str] = {
+    "LONDON_SWEEP_FAILURE_CONTINUATION": "A",
+    "DBBS": "B",
+    "DINAPOLI_STRUCTURE": "C",
+}
+SETUP_TYPE_BY_STRATEGY_LETTER: dict[str, str] = {
+    letter: setup_type for setup_type, letter in STRATEGY_LETTER_BY_SETUP_TYPE.items()
 }
 # B — dbbs (DBBS): Dual Bollinger Band Squeeze + Bear Kill Switch V2（本番採用）
 # B — cspa (CSPA): アーカイブ — 検証の結果、プロップ用ポートフォリオには向いていない
@@ -47,24 +61,27 @@ STRATEGY_LETTER_BY_MODE: dict[str, str] = {
 STRATEGY_ABBREV_BY_MODE: dict[str, str] = {
     "lsfc": "LSFC",
     "dbbs": DBBS_ABBREV,
+    "lbo": LBO_ABBREV,
     "ttm": TTM_ABBREV,
     "dinapoli": DINAPOLI_ABBREV,
 }
 
 STRATEGY_FULL_NAME_BY_MODE: dict[str, str] = {
     "dbbs": DBBS_FULL_NAME,
+    "lbo": LBO_FULL_NAME,
     "ttm": TTM_FULL_NAME,
     "dinapoli": DINAPOLI_FULL_NAME,
 }
 
 STRATEGY_PRIORITY_ORDER: tuple[str, ...] = (
-    "lsfc", "dbbs", "ttm", "dinapoli",
+    "lsfc", "dbbs", "lbo", "ttm", "dinapoli",
 )
 
 # (mode_key, strategy class) — archive 外の全実装。BT 用。
 STRATEGY_CLASS_REGISTRY: tuple[tuple[str, type[BaseStrategy]], ...] = (
     ("lsfc", LondonSweepFailureStrategy),
     ("dbbs", DbbsStrategy),
+    ("lbo", LboStrategy),
     ("ttm", TtmStrategy),
     ("dinapoli", DiNapoliStrategy),
 )
@@ -103,8 +120,12 @@ def resolve_strategy_mode(strategy: BaseStrategy) -> str:
 
 
 PORTFOLIO_AC_MODES: frozenset[str] = frozenset({"ac"})
+PORTFOLIO_AB_MODES: frozenset[str] = frozenset({"ab"})
+PORTFOLIO_BC_MODES: frozenset[str] = frozenset({"bc"})
 PORTFOLIO_ABC_MODES: frozenset[str] = frozenset({"abc", "abcd", "abcdn"})
-MTF_PORTFOLIO_MODES: frozenset[str] = PORTFOLIO_AC_MODES | PORTFOLIO_ABC_MODES
+MTF_PORTFOLIO_MODES: frozenset[str] = (
+    PORTFOLIO_AC_MODES | PORTFOLIO_AB_MODES | PORTFOLIO_BC_MODES | PORTFOLIO_ABC_MODES
+)
 
 
 def is_mtf_portfolio_mode(mode: str) -> bool:
@@ -113,8 +134,18 @@ def is_mtf_portfolio_mode(mode: str) -> bool:
 
 
 def portfolio_includes_dinapoli(mode: str) -> bool:
-    """True when portfolio selector expands to lsfc + dinapoli."""
-    return mode in (PORTFOLIO_ABC_MODES | PORTFOLIO_AC_MODES)
+    """True when portfolio selector expands to a mode including DiNapoli."""
+    return mode in (PORTFOLIO_ABC_MODES | PORTFOLIO_AC_MODES | PORTFOLIO_BC_MODES)
+
+
+def portfolio_includes_dbbs(mode: str) -> bool:
+    """True when portfolio selector expands to a mode including DBBS."""
+    return mode in (PORTFOLIO_AB_MODES | PORTFOLIO_ABC_MODES | PORTFOLIO_BC_MODES)
+
+
+def portfolio_needs_h4(mode: str) -> bool:
+    """True when portfolio BT/WFT requires H4 ATR data."""
+    return portfolio_includes_dinapoli(mode)
 
 
 def expand_strategy_modes(
@@ -131,8 +162,12 @@ def expand_strategy_modes(
             expanded.append("lsfc")
         elif item in PORTFOLIO_ABC_MODES:
             expanded.extend(["lsfc", "dbbs", "dinapoli"])
+        elif item in PORTFOLIO_AB_MODES:
+            expanded.extend(["lsfc", "dbbs"])
         elif item in PORTFOLIO_AC_MODES:
             expanded.extend(["lsfc", "dinapoli"])
+        elif item in PORTFOLIO_BC_MODES:
+            expanded.extend(["dbbs", "dinapoli"])
         else:
             expanded.append(item)
     return tuple(expanded)
@@ -180,6 +215,8 @@ __all__ = [
     "STRATEGY_CLASS_REGISTRY",
     "STRATEGY_FULL_NAME_BY_MODE",
     "STRATEGY_LETTER_BY_MODE",
+    "STRATEGY_LETTER_BY_SETUP_TYPE",
+    "SETUP_TYPE_BY_STRATEGY_LETTER",
     "STRATEGY_PRIORITY_ORDER",
     "StrategyModeKey",
     "TrendDirection",
@@ -192,6 +229,10 @@ __all__ = [
     "DbbsStrategy",
     "DBBS_ABBREV",
     "DBBS_FULL_NAME",
+    "LboSetup",
+    "LboStrategy",
+    "LBO_ABBREV",
+    "LBO_FULL_NAME",
     "DiNapoliSetup",
     "DiNapoliStrategy",
     "DINAPOLI_FULL_NAME",
@@ -205,8 +246,12 @@ __all__ = [
     "is_mtf_portfolio_mode",
     "MTF_PORTFOLIO_MODES",
     "PORTFOLIO_ABC_MODES",
+    "PORTFOLIO_AB_MODES",
     "PORTFOLIO_AC_MODES",
+    "PORTFOLIO_BC_MODES",
+    "portfolio_includes_dbbs",
     "portfolio_includes_dinapoli",
+    "portfolio_needs_h4",
     "resolve_strategy_mode",
     "strategy_priority_index",
 ]

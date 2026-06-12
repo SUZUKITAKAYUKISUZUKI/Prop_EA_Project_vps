@@ -25,9 +25,11 @@ MAX_DAILY_EXPOSURE_LIMIT_PCT = float(
 PIP_SIZE = 0.0001
 PIP_VALUE_PER_LOT = 10.0
 
-# --- 同一シンボル1ポジション制限（L2） ---
-# 実ポジション [entry, close) 区間中は同シンボルへの新規エントリーを遮断（L5 確定後に登録）
-MutualExclusionMode = Literal["one_per_symbol", "off"]
+# --- 同一戦略・同一シンボル1ポジション制限（L2） ---
+# 実ポジション [entry, close) 区間中は同戦略・同シンボルへの新規エントリーを遮断（L5 確定後に登録）
+# BROKER_POSITION は MT5 実保有（setup_type 不明）のため全戦略をブロック
+MutualExclusionMode = Literal["one_per_strategy_symbol", "off"]
+BROKER_POSITION_SETUP_TYPE = "BROKER_POSITION"
 REASON_SYMBOL_ONE_POSITION_LIMIT = "SYMBOL_ONE_POSITION_LIMIT"
 DECISION_MUTUAL_EXCLUSION_LOCK = "MUTUAL_EXCLUSION_LOCK"
 # 実執行とみなす trade_result（シャドー NOT_EXECUTED は除外）
@@ -115,19 +117,27 @@ def apply_profit_cushion_brake(
     return lot_factor, risk_budget, lot_size, cushion_mult
 
 
-def is_mutual_exclusion_enabled() -> bool:
-    """MUTUAL_EXCLUSION_ENABLED=0 または MUTUAL_EXCLUSION_MODE=off で無効（未設定時 ON）。"""
+def is_mutual_exclusion_enabled(setup_type: str | None = None) -> bool:
+    """MUTUAL_EXCLUSION_ENABLED=0 または MUTUAL_EXCLUSION_MODE=off で無効（未設定時 ON）。
+
+    ピラミッディング有効戦略は L2 を自動 OFF（同一戦略内の積み増しを許可）。
+    """
     raw = os.getenv("MUTUAL_EXCLUSION_ENABLED", "1").strip().lower()
     if raw in ("0", "false", "off", "no", "disabled"):
         return False
     legacy = os.getenv("MUTUAL_EXCLUSION_MODE", "").strip().lower()
     if legacy in ("off", "none", "disabled", "0", "false"):
         return False
+    if setup_type is not None:
+        from pyramid_manager import is_pyramid_enabled
+
+        if is_pyramid_enabled(setup_type):
+            return False
     return True
 
 
 def get_mutual_exclusion_mode() -> MutualExclusionMode:
-    return "one_per_symbol" if is_mutual_exclusion_enabled() else "off"
+    return "one_per_strategy_symbol" if is_mutual_exclusion_enabled() else "off"
 
 
 def mutual_exclusion_reason_tag() -> str:
@@ -151,7 +161,7 @@ def apply_portfolio_lot_multiplier(lot_factor: float) -> float:
 
 @dataclass
 class OpenPosition:
-    """同一シンボル1ポジション制限: 実執行ポジションの [entry, close) 区間。"""
+    """同一戦略・同一シンボル1ポジション制限: 実執行ポジションの [entry, close) 区間。"""
 
     pair: str
     setup_type: str
@@ -561,24 +571,28 @@ class AccountState:
         setup_type: str,
     ) -> tuple[bool, str | None]:
         """
-        同シンボルにアクティブポジション（entry <= ts < close）がある場合 True。
-        setup_type / 戦略は問わない。off 時は常に False。
+        同戦略・同シンボルにアクティブポジション（entry <= ts < close）がある場合 True。
+        BROKER_POSITION（MT5 実保有）は setup_type 不問で全戦略をブロック。off 時は常に False。
         """
-        del setup_type
-        if not is_mutual_exclusion_enabled():
+        if not is_mutual_exclusion_enabled(setup_type):
             return False, None
 
         import pandas as pd
 
         self.purge_closed_positions(ts)
         pair_u = self._pair_key(pair)
+        setup_u = setup_type.strip()
         now = pd.Timestamp(ts)
         for pos in self.open_positions:
             if pos.pair != pair_u:
                 continue
             entry = pd.Timestamp(pos.entry_ts)
             close = pd.Timestamp(pos.close_ts)
-            if entry <= now < close:
+            if not (entry <= now < close):
+                continue
+            if pos.setup_type == BROKER_POSITION_SETUP_TYPE:
+                return True, pos.setup_type
+            if pos.setup_type == setup_u:
                 return True, pos.setup_type
         return False, None
 
@@ -737,16 +751,17 @@ def check_mutual_exclusion_from_records(
     setup_type: str,
 ) -> tuple[bool, str | None]:
     """
-    バックテスト records から同一シンボル1ポジション制限を走査。
-    シグナル時点で区間重複する実執行があれば True（setup_type 不問）。
+    バックテスト records から同一戦略・同一シンボル1ポジション制限を走査。
+    シグナル時点で同 setup_type の区間重複する実執行があれば True。
+    BROKER_POSITION は全戦略をブロック。
     """
-    del setup_type
-    if not is_mutual_exclusion_enabled():
+    if not is_mutual_exclusion_enabled(setup_type):
         return False, None
 
     import pandas as pd
 
     pair_u = pair.strip().upper()
+    setup_u = setup_type.strip()
     signal = pd.Timestamp(signal_ts)
 
     for rec in records:
@@ -762,6 +777,10 @@ def check_mutual_exclusion_from_records(
         if holding <= 0:
             continue
         close = entry + pd.Timedelta(minutes=holding)
-        if entry <= signal < close:
+        if not (entry <= signal < close):
+            continue
+        if existing == BROKER_POSITION_SETUP_TYPE:
+            return True, existing
+        if existing == setup_u:
             return True, existing
     return False, None

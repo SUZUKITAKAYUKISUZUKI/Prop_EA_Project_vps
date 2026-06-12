@@ -148,6 +148,34 @@ string BuildMarketBlock(const string symbol, const ENUM_TIMEFRAMES tf)
 }
 
 //+------------------------------------------------------------------+
+string StrategyLetterFromSetupType(const string setup_type)
+{
+   if(setup_type == "LONDON_SWEEP_FAILURE_CONTINUATION") return "A";
+   if(setup_type == "DBBS") return "B";
+   if(setup_type == "DINAPOLI_STRUCTURE") return "C";
+   return "";
+}
+
+//+------------------------------------------------------------------+
+string SetupTypeFromStrategyLetter(const string letter)
+{
+   if(letter == "A") return "LONDON_SWEEP_FAILURE_CONTINUATION";
+   if(letter == "B") return "DBBS";
+   if(letter == "C") return "DINAPOLI_STRUCTURE";
+   return "";
+}
+
+//+------------------------------------------------------------------+
+string ExtractStrategyLetterFromComment(const string comment)
+{
+   if(StringFind(comment, "PropEA_") != 0)
+      return "";
+   if(StringLen(comment) < 8)
+      return "";
+   return StringSubstr(comment, 7, 1);
+}
+
+//+------------------------------------------------------------------+
 string BuildOpenPositionsJson()
 {
    string json = ",\"open_positions\":[";
@@ -166,13 +194,21 @@ string BuildOpenPositionsJson()
       if(pair != "EURUSD" && pair != "GBPUSD")
          continue;
 
+      string comment = PositionGetString(POSITION_COMMENT);
+      string letter = ExtractStrategyLetterFromComment(comment);
+      string setup_type = SetupTypeFromStrategyLetter(letter);
+      if(setup_type == "")
+         setup_type = "BROKER_POSITION";
+
       if(!first)
          json += ",";
       first = false;
       json += StringFormat(
-         "{\"pair\":\"%s\",\"entry_time\":\"%s\"}",
+         "{\"pair\":\"%s\",\"entry_time\":\"%s\",\"setup_type\":\"%s\",\"strategy_letter\":\"%s\"}",
          JsonEscape(pair),
-         FormatBarTime((datetime)PositionGetInteger(POSITION_TIME))
+         FormatBarTime((datetime)PositionGetInteger(POSITION_TIME)),
+         JsonEscape(setup_type),
+         JsonEscape(letter)
       );
    }
    json += "]";
@@ -394,11 +430,8 @@ bool execute_trade(
       return false;
    }
 
-   if(HasOpenPosition(symbol))
-   {
-      Print("execute_trade skip - position already open: ", symbol);
-      return false;
-   }
+   // L2 per-strategy lock is enforced in Python (MUTUAL_EXCLUSION_ENABLED).
+   // Do not block at symbol level — A+B+C may hold LSFC/DBBS/DiNapoli on the same pair.
 
    long spread = SymbolInfoInteger(symbol, SYMBOL_SPREAD);
    if(spread > InpMaxSpreadPoints)
@@ -603,7 +636,16 @@ void ExecuteSignal(const string symbol, const string response_json)
          ? SymbolInfoDouble(symbol, SYMBOL_ASK)
          : SymbolInfoDouble(symbol, SYMBOL_BID);
 
-   if(!execute_trade(symbol, action, risk_budget, entry, sl, tp, lot_size, message, response_json))
+   string setup_type;
+   string strategy_letter;
+   ExtractJsonString(response_json, "setup_type", setup_type);
+   if(!ExtractJsonString(response_json, "strategy_letter", strategy_letter) || strategy_letter == "")
+      strategy_letter = StrategyLetterFromSetupType(setup_type);
+   string trade_comment = "PropEA";
+   if(strategy_letter != "")
+      trade_comment = "PropEA_" + strategy_letter;
+
+   if(!execute_trade(symbol, action, risk_budget, entry, sl, tp, lot_size, trade_comment, response_json))
       Print("execute_trade failed for action=", action);
 }
 

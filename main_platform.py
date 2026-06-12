@@ -112,6 +112,12 @@ from strategies.dbbs import (
     DbbsSetup,
     SETUP_TYPE as DBBS_SETUP_TYPE,
 )
+from strategies.lbo import (
+    LboSetup,
+    SETUP_TYPE as LBO_SETUP_TYPE,
+    is_lbo_defense_pure_mode,
+    is_lbo_l4_bypass,
+)
 from strategies.dbbs_common import (
     is_dbbs_defense_pure_mode,
     is_dbbs_l4_bypass,
@@ -174,7 +180,7 @@ from strategies.mtf_timestamp import (
 )
 from strategies import get_registered_strategies
 
-SetupUnion = LsfcSetup | ContinuationSetup | AlsSetup | FvgFillSetup | TrefSetup | VexpSetup | DtpaSetup | CspaSetup | SpringSetup | LgrSetup | DbbsSetup | DiNapoliSetup
+SetupUnion = LsfcSetup | ContinuationSetup | AlsSetup | FvgFillSetup | TrefSetup | VexpSetup | DtpaSetup | CspaSetup | SpringSetup | LgrSetup | DbbsSetup | DiNapoliSetup | LboSetup
 
 # =============================================================================
 # ■ ユーザー設定定数（ここを書き換えるだけでモード切替）
@@ -450,6 +456,8 @@ def is_defense_pure_setup(setup_type: str) -> bool:
         return is_dinapoli_defense_pure_mode()
     if setup_type == DBBS_SETUP_TYPE:
         return is_dbbs_defense_pure_mode()
+    if setup_type == LBO_SETUP_TYPE:
+        return is_lbo_defense_pure_mode()
     return False
 
 
@@ -495,6 +503,10 @@ def is_bayes_bypass_setup_type(setup_type: str) -> bool:
         from strategies.dbbs_common import is_dbbs_generic_bayes_bypass
 
         return is_dbbs_generic_bayes_bypass()
+    if setup_type == LBO_SETUP_TYPE:
+        from strategies.lbo import is_lbo_generic_bayes_bypass
+
+        return is_lbo_generic_bayes_bypass()
     return setup_type in BAYES_BYPASS_SETUP_TYPES
 
 
@@ -519,6 +531,8 @@ def is_l4_bypass_setup_type(setup_type: str) -> bool:
     if setup_type == DINAPOLI_SETUP_TYPE and is_dinapoli_l4_bypass():
         return True
     if setup_type == DBBS_SETUP_TYPE and is_dbbs_l4_bypass():
+        return True
+    if setup_type == LBO_SETUP_TYPE and is_lbo_l4_bypass():
         return True
     if setup_type == TREF_SETUP_TYPE:
         from strategies.archive.tokyo_range_expansion_failure import load_tref_config
@@ -629,6 +643,7 @@ CSV_COLUMNS = [
     "wyckoff_features",
     "lgr_features",
     "ttm_features",
+    "lbo_features",
     "vp_zone",
     "l2_regime",
     "l2_base_lot_factor",
@@ -2145,6 +2160,16 @@ def _evaluate_setup_at_timestamp(
         has_bos = False
         atr_ratio = float(raw.get("bb20_width_atr_ratio", 1.0) or 1.0)
         both_sweep = False
+    elif setup_type == LBO_SETUP_TYPE:
+        smt = float(raw.get("smt_intensity", 0.0))
+        smt_feats = SMTFeatures(
+            intensity=smt,
+            diff=float(raw.get("smt_diff", 0.0)),
+            leader=str(raw.get("smt_leader", "NONE")),
+        )
+        has_bos = False
+        atr_ratio = float(raw.get("breakout_candle_atr_ratio", 1.0) or 1.0)
+        both_sweep = bool(raw.get("both_broke", False))
     else:
         smt = float(raw["smt_intensity"])
         smt_feats = SMTFeatures(
@@ -3038,7 +3063,7 @@ def _apply_trade_outcome(
                 4,
             )
 
-            if audit_rm.is_mutual_exclusion_enabled():
+            if audit_rm.is_mutual_exclusion_enabled(pending.setup_type):
                 account.register_executed_position(
                     setup.timestamp,
                     setup.pair,
@@ -3062,7 +3087,7 @@ def _apply_trade_outcome(
                 float(getattr(account, "daily_profit_r", 0.0) or 0.0) + float(profit_r),
                 4,
             )
-            if audit_rm.is_mutual_exclusion_enabled():
+            if audit_rm.is_mutual_exclusion_enabled(pending.setup_type):
                 account.register_executed_position(
                     setup.timestamp,
                     setup.pair,
@@ -3660,10 +3685,13 @@ def sync_broker_open_positions(
     ts: pd.Timestamp,
 ) -> None:
     """
-    Live VPS: MT5 から送られた open_positions を L2 同一シンボル1ポジション制限へ同期。
+    Live VPS: MT5 から送られた open_positions を L2（戦略×シンボル1ポジション）へ同期。
 
-    ブローカー実保有が正。リストが空なら open_positions をクリアする。
+    各 item は setup_type または strategy_letter (A/B/C) を含むこと。
+    不明な場合のみ BROKER_POSITION（当該シンボル全戦略ブロック）として扱う。
     """
+    from strategies import SETUP_TYPE_BY_STRATEGY_LETTER
+
     if not audit_rm.is_mutual_exclusion_enabled():
         return
     account.purge_closed_positions(ts)
@@ -3672,20 +3700,30 @@ def sync_broker_open_positions(
         return
 
     synced: list[audit_rm.OpenPosition] = []
-    seen: set[str] = set()
+    seen: set[tuple[str, str]] = set()
     for item in broker_positions:
         if not isinstance(item, dict):
             continue
         pair = normalize_pair_name(str(item.get("pair", "")))
-        if pair is None or pair in seen:
+        if pair is None:
             continue
-        seen.add(pair)
+        setup_type_raw = str(item.get("setup_type") or "").strip()
+        letter = str(item.get("strategy_letter") or "").strip().upper()
+        if not setup_type_raw and letter:
+            setup_type_raw = SETUP_TYPE_BY_STRATEGY_LETTER.get(letter, "")
+        if not setup_type_raw:
+            setup_type = BROKER_POSITION_SETUP_TYPE
+        else:
+            setup_type = setup_type_raw
+        dedupe_key = (pair, setup_type)
+        if dedupe_key in seen:
+            continue
+        seen.add(dedupe_key)
         entry_raw = item.get("entry_time") or item.get("entry_ts")
         try:
             entry = pd.Timestamp(entry_raw) if entry_raw else ts
         except (TypeError, ValueError):
             entry = ts
-        setup_type = str(item.get("setup_type") or BROKER_POSITION_SETUP_TYPE).strip()
         synced.append(
             audit_rm.OpenPosition(
                 pair=pair,
@@ -3851,6 +3889,9 @@ def pending_to_trade_signal(pending: PendingEvaluation) -> dict[str, Any]:
         f"bayes={pending.bayes_probability:.2f} | htf={pending.htf_trend_direction} | "
         f"tags={','.join(pending.tags)}"
     )
+    from strategies import STRATEGY_LETTER_BY_SETUP_TYPE
+
+    strategy_letter = STRATEGY_LETTER_BY_SETUP_TYPE.get(pending.setup_type, "")
     signal = {
         "action": action,
         "lot_size": float(pending.lot_size) if action in ("BUY", "SELL") else 0.0,
@@ -3859,6 +3900,8 @@ def pending_to_trade_signal(pending: PendingEvaluation) -> dict[str, Any]:
         "tp": float(round(setup.take_profit, 5)),
         "entry": float(round(setup.entry_price, 5)),
         "message": message,
+        "setup_type": pending.setup_type,
+        "strategy_letter": strategy_letter,
         "decision_source": pending.decision_source,
         "trade_id": pending.trade_id,
         "lot_factor": float(pending.lot_factor),

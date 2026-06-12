@@ -29,7 +29,13 @@ def main() -> None:
 
     required = [
         ROOT / "strategies" / "bt_ohlcv.py",
+        ROOT / "strategies" / "london_sweep_failure.py",
+        ROOT / "strategies" / "dbbs.py",
+        ROOT / "strategies" / "dbbs_common.py",
+        ROOT / "strategies" / "dbbs_bear_kill_switch.py",
+        ROOT / "strategies" / "scan_numba_util.py",
         ROOT / "strategies" / "dinapoli.py",
+        ROOT / "strategies" / "dinapoli_mtf.py",
         ROOT / "src" / "filters" / "dn_prop_gate_runtime.py",
         ROOT / "backtest_results" / "models" / "dn_bayes_ev_v2.json",
         ROOT / "backtest_results" / "models" / "dn_prop_gate_v1.json",
@@ -42,7 +48,7 @@ def main() -> None:
             + "\n  ".join(str(p.relative_to(ROOT)) for p in missing)
             + "\nRe-sync from dev (sync_vps_min.cmd) or git pull the latest VPS repo."
         )
-    print("[OK] VPS minimum files present (A+C: LSFC + DiNapoli)")
+    print("[OK] VPS minimum files present (A+B+C: LSFC + DBBS + DiNapoli)")
 
     try:
         import pandas as pd
