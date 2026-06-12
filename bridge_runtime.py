@@ -59,6 +59,12 @@ def startup_bridge_runtime() -> dict[str, Any]:
     gemini_ok = is_gemini_configured()
     summary["gemini"] = "ready" if gemini_ok else "unconfigured"
 
+    from strategies.dinapoli import configure_dinapoli_defense_env
+    from strategies.dbbs_common import configure_dbbs_defense_env
+
+    configure_dinapoli_defense_env()
+    configure_dbbs_defense_env()
+
     configure_live_runtime(enable_llm=gemini_ok)
     _llm_auditor_enabled = gemini_ok
 

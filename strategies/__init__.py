@@ -15,6 +15,12 @@ from strategies.ttm import (
     TtmSetup,
     TtmStrategy,
 )
+from strategies.dbbs import (
+    STRATEGY_ABBREV as DBBS_ABBREV,
+    STRATEGY_FULL_NAME as DBBS_FULL_NAME,
+    DbbsSetup,
+    DbbsStrategy,
+)
 from strategies.dinapoli import (
     STRATEGY_ABBREV as DINAPOLI_ABBREV,
     STRATEGY_FULL_NAME as DINAPOLI_FULL_NAME,
@@ -22,15 +28,17 @@ from strategies.dinapoli import (
     DiNapoliStrategy,
 )
 StrategyModeKey = Literal[
-    "lsfc", "als", "fvg", "tref", "vexp", "dtpa", "cspa", "wyckoff", "lgr", "ttm", "dinapoli",
+    "lsfc", "als", "fvg", "tref", "vexp", "dtpa", "cspa", "wyckoff", "lgr", "ttm", "dbbs", "dinapoli",
     "continuation", "main", "all", "ac", "abc", "abcd", "abcdn",
 ]
 
 # 実運用 (MT5 Bridge) で発注可能な mode — A～Z letter 割当のみ。
 STRATEGY_LETTER_BY_MODE: dict[str, str] = {
     "lsfc": "A",
+    "dbbs": "B",
     "dinapoli": "C",
 }
+# B — dbbs (DBBS): Dual Bollinger Band Squeeze + Bear Kill Switch V2（本番採用）
 # B — cspa (CSPA): アーカイブ — 検証の結果、プロップ用ポートフォリオには向いていない
 # D — ttm: 仲値流動性イベント特徴量収集（執行 M1 / 構造 M5 / ATR M15）
 # H — wyckoff (WR): アーカイブ — 新戦略 Liquidity Grab Reversal (LGR) 構築に向けての発展的廃止
@@ -38,22 +46,25 @@ STRATEGY_LETTER_BY_MODE: dict[str, str] = {
 
 STRATEGY_ABBREV_BY_MODE: dict[str, str] = {
     "lsfc": "LSFC",
+    "dbbs": DBBS_ABBREV,
     "ttm": TTM_ABBREV,
     "dinapoli": DINAPOLI_ABBREV,
 }
 
 STRATEGY_FULL_NAME_BY_MODE: dict[str, str] = {
+    "dbbs": DBBS_FULL_NAME,
     "ttm": TTM_FULL_NAME,
     "dinapoli": DINAPOLI_FULL_NAME,
 }
 
 STRATEGY_PRIORITY_ORDER: tuple[str, ...] = (
-    "lsfc", "ttm", "dinapoli",
+    "lsfc", "dbbs", "ttm", "dinapoli",
 )
 
 # (mode_key, strategy class) — archive 外の全実装。BT 用。
 STRATEGY_CLASS_REGISTRY: tuple[tuple[str, type[BaseStrategy]], ...] = (
     ("lsfc", LondonSweepFailureStrategy),
+    ("dbbs", DbbsStrategy),
     ("ttm", TtmStrategy),
     ("dinapoli", DiNapoliStrategy),
 )
@@ -118,7 +129,9 @@ def expand_strategy_modes(
             expanded.append("lsfc")
         elif item == "all":
             expanded.append("lsfc")
-        elif item in (PORTFOLIO_AC_MODES | PORTFOLIO_ABC_MODES):
+        elif item in PORTFOLIO_ABC_MODES:
+            expanded.extend(["lsfc", "dbbs", "dinapoli"])
+        elif item in PORTFOLIO_AC_MODES:
             expanded.extend(["lsfc", "dinapoli"])
         else:
             expanded.append(item)
@@ -175,6 +188,10 @@ __all__ = [
     "TTM_FULL_NAME",
     "TtmSetup",
     "TtmStrategy",
+    "DbbsSetup",
+    "DbbsStrategy",
+    "DBBS_ABBREV",
+    "DBBS_FULL_NAME",
     "DiNapoliSetup",
     "DiNapoliStrategy",
     "DINAPOLI_FULL_NAME",

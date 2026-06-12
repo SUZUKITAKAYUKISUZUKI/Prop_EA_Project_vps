@@ -183,6 +183,16 @@ class PyramidRegisterResponse(BaseModel):
     message: str = "registered"
 
 
+class DbbsTradeClosedRequest(BaseModel):
+    result_r: float
+
+
+class DbbsTradeClosedResponse(BaseModel):
+    ok: bool = True
+    last_3_avg_r: float | None = None
+    bear_kill_switch_active: bool = False
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     from bridge_runtime import shutdown_bridge_runtime, startup_bridge_runtime
@@ -242,6 +252,22 @@ async def trade_signal(request: TradeSignalRequest) -> TradeSignalResponse:
         logger.exception("POST /trade_signal failed: %s", exc)
         raise HTTPException(status_code=500, detail=str(exc)) from exc
     return TradeSignalResponse(**result)
+
+
+@app.post("/dbbs/trade_closed", response_model=DbbsTradeClosedResponse)
+async def dbbs_trade_closed(request: DbbsTradeClosedRequest) -> DbbsTradeClosedResponse:
+    """DBBS Bear Kill Switch V2 — update edge memory after a closed trade."""
+    from strategies.dbbs_bear_kill_switch import get_edge_tracker, record_closed_trade_result
+
+    record_closed_trade_result(request.result_r)
+    snap = get_edge_tracker().pre_trade_snapshot()
+    last3 = snap.get("last_3_avg_r")
+    last3_out = float(last3) if last3 is not None and str(last3) != "nan" else None
+    return DbbsTradeClosedResponse(
+        ok=True,
+        last_3_avg_r=last3_out,
+        bear_kill_switch_active=bool(snap.get("bear_kill_switch_active")),
+    )
 
 
 @app.post("/sentinel/tick", response_model=SentinelStatusResponse)

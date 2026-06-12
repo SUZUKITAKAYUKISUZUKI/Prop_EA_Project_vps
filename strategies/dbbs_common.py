@@ -1,5 +1,5 @@
 """
-strategies/dbbs_common.py — DBB Squeeze (DBBS) shared types + Numba kernels.
+strategies/dbbs_common.py — Dual Bollinger Band Squeeze (DBBS) shared types + Numba kernels.
 
 MTF: exec M15 / structure H1 (BB) / ATR H4.
 Pure BT / feature-collection phase: no candidate_score, bayes_probability=1.0 fixed.
@@ -19,10 +19,13 @@ from strategies.market_utils import pip_size_for_pair
 from strategies.scan_numba_util import njit
 
 STRATEGY_ABBREV = "DBBS"
-STRATEGY_FULL_NAME = "DBB Squeeze"
+STRATEGY_FULL_NAME = "Dual Bollinger Band Squeeze"
 DBBS_PAIR_PRIMARY = "EURUSD"
 DBBS_PAIR_SECONDARY = "GBPUSD"
-ALLOWED_PAIRS = frozenset({DBBS_PAIR_PRIMARY, DBBS_PAIR_SECONDARY})
+DBBS_EXTENDED_PAIRS = frozenset({"USDJPY", "AUDUSD", "AUDJPY", "NZDUSD"})
+ALLOWED_PAIRS = frozenset(
+    {DBBS_PAIR_PRIMARY, DBBS_PAIR_SECONDARY, *DBBS_EXTENDED_PAIRS}
+)
 EXEC_BAR_MINUTES = 15
 STRUCTURE_BAR_MINUTES = 60
 DBBS_ATR_BAR_MINUTES = 240
@@ -44,6 +47,10 @@ SQUEEZE_MAX_HOLD_H1 = 48
 SQUEEZE_MIN_HOLD_H1 = 3
 DBBS_BAYES_PURE_PROB = 1.0
 
+# Bear Kill Switch V2 — default production risk control (see strategies/dbbs_bear_kill_switch.py)
+BEAR_KILL_SWITCH_V2_ENABLED_DEFAULT = True
+BEAR_KILL_SWITCH_V2_THRESHOLD_DEFAULT = 0.20
+
 Direction = Literal["BUY", "SELL"]
 
 
@@ -57,8 +64,48 @@ def is_dbbs_enabled() -> bool:
     return raw.strip().lower() in ("1", "true", "yes", "on")
 
 
-def is_dbbs_l4_bypass() -> bool:
+def is_dbbs_defense_mode() -> bool:
+    """
+    DBBS canonical production (default when not pure-data research).
+
+    - L0-L2 / L4.5-L6: ON
+    - L3.5 generic BayesEngine: OFF
+    - L4 Gemini: OFF
+    - Bear Kill Switch V2: ON (default)
+    - 3 safety brakes: ON (Profit Cushion / Twin Brake / DD Throttling)
+    """
+    if is_dbbs_pure_data_mode():
+        return False
+    flag = os.getenv("DBBS_DEFENSE", "1").strip().lower()
+    return flag in ("1", "true", "yes", "on")
+
+
+def is_dbbs_defense_pure_mode() -> bool:
+    """DBBS 防御レイヤー純粋モード（``DBBS_PURE_DATA_MODE=1``）。"""
     return is_dbbs_pure_data_mode()
+
+
+def is_dbbs_l4_bypass() -> bool:
+    """DBBS: Gemini L4 監査は常に無効（pure-data / canonical defense）。"""
+    return is_dbbs_pure_data_mode() or is_dbbs_defense_mode()
+
+
+def is_dbbs_generic_bayes_bypass() -> bool:
+    """Generic L3.5 BayesEngine をスキップ（DBBS 本番）。"""
+    return is_dbbs_pure_data_mode() or is_dbbs_defense_mode()
+
+
+def configure_dbbs_defense_env() -> None:
+    """Apply DBBS canonical defense defaults (idempotent)."""
+    if is_dbbs_pure_data_mode():
+        return
+    os.environ.setdefault("DBBS_DEFENSE", "1")
+    os.environ.setdefault("DBBS_BEAR_KILL_SWITCH", "1")
+    os.environ.setdefault("DBBS_BEAR_KILL_SWITCH_THRESHOLD", "0.20")
+    os.environ.setdefault("DBBS_PURE_DATA_MODE", "0")
+    os.environ.setdefault("PROFIT_CUSHION_ENABLED", "1")
+    os.environ.setdefault("TWIN_BRAKE_ENABLED", "1")
+    os.environ.setdefault("DD_THROTTLING_ENABLED", "1")
 
 
 class BandMatrix:
@@ -185,6 +232,9 @@ DBBS_FEATURE_COLUMNS: tuple[str, ...] = (
     "mfe",
     "mae",
     "rr_ratio",
+    "last_3_avg_r",
+    "edge_risk_mult",
+    "bear_kill_switch_active",
 )
 
 
@@ -909,10 +959,15 @@ def build_dbbs_feature_log_row(
     setup: DbbsSetupBase,
     trade_result: str,
     profit_r: float,
+    result_r: float | None = None,
     decision_source: str = "ALLOW",
     executed: bool = True,
+    last_3_avg_r: float | None = None,
+    edge_risk_mult: float | None = None,
+    bear_kill_switch_active: bool | None = None,
 ) -> dict[str, Any]:
     row = setup.bayes_features.as_dict()
+    raw_result = float(result_r if result_r is not None else profit_r)
     row.update(
         {
             "trade_id": trade_id,
@@ -923,9 +978,17 @@ def build_dbbs_feature_log_row(
             "executed": executed,
             "trade_result": trade_result,
             "profit_r": round(float(profit_r), 4),
-            "result_r": round(float(profit_r), 4),
+            "result_r": round(raw_result, 4),
             "outcome_label": trade_result if trade_result in ("WIN", "LOSS") else setup.bayes_features.outcome_label,
             "rr_ratio": round(float(setup.rr_ratio), 4),
         }
     )
+    if last_3_avg_r is not None and np.isfinite(last_3_avg_r):
+        row["last_3_avg_r"] = round(float(last_3_avg_r), 4)
+    else:
+        row["last_3_avg_r"] = ""
+    if edge_risk_mult is not None:
+        row["edge_risk_mult"] = round(float(edge_risk_mult), 4)
+    if bear_kill_switch_active is not None:
+        row["bear_kill_switch_active"] = bool(bear_kill_switch_active)
     return {k: row.get(k, "") for k in DBBS_FEATURE_COLUMNS}

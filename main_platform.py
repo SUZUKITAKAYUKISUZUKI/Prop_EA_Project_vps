@@ -108,6 +108,14 @@ from strategies.dinapoli import (
     is_dinapoli_l4_bypass,
     is_dinapoli_pure_bt_mode,
 )
+from strategies.dbbs import (
+    DbbsSetup,
+    SETUP_TYPE as DBBS_SETUP_TYPE,
+)
+from strategies.dbbs_common import (
+    is_dbbs_defense_pure_mode,
+    is_dbbs_l4_bypass,
+)
 from strategies.ttm import (
     TtmSetup,
     SETUP_TYPE as TTM_SETUP_TYPE,
@@ -166,7 +174,7 @@ from strategies.mtf_timestamp import (
 )
 from strategies import get_registered_strategies
 
-SetupUnion = LsfcSetup | ContinuationSetup | AlsSetup | FvgFillSetup | TrefSetup | VexpSetup | DtpaSetup | CspaSetup | SpringSetup | LgrSetup | DiNapoliSetup
+SetupUnion = LsfcSetup | ContinuationSetup | AlsSetup | FvgFillSetup | TrefSetup | VexpSetup | DtpaSetup | CspaSetup | SpringSetup | LgrSetup | DbbsSetup | DiNapoliSetup
 
 # =============================================================================
 # ■ ユーザー設定定数（ここを書き換えるだけでモード切替）
@@ -440,6 +448,8 @@ def is_defense_pure_setup(setup_type: str) -> bool:
         return is_ttm_pure_data_mode()
     if setup_type == DINAPOLI_SETUP_TYPE:
         return is_dinapoli_defense_pure_mode()
+    if setup_type == DBBS_SETUP_TYPE:
+        return is_dbbs_defense_pure_mode()
     return False
 
 
@@ -481,6 +491,10 @@ def is_bayes_bypass_setup_type(setup_type: str) -> bool:
         from strategies.dinapoli import is_dinapoli_generic_bayes_bypass
 
         return is_dinapoli_generic_bayes_bypass()
+    if setup_type == DBBS_SETUP_TYPE:
+        from strategies.dbbs_common import is_dbbs_generic_bayes_bypass
+
+        return is_dbbs_generic_bayes_bypass()
     return setup_type in BAYES_BYPASS_SETUP_TYPES
 
 
@@ -503,6 +517,8 @@ def is_l4_bypass_setup_type(setup_type: str) -> bool:
     if setup_type == CSPA_SETUP_TYPE and is_cspa_pure_bt_mode():
         return True
     if setup_type == DINAPOLI_SETUP_TYPE and is_dinapoli_l4_bypass():
+        return True
+    if setup_type == DBBS_SETUP_TYPE and is_dbbs_l4_bypass():
         return True
     if setup_type == TREF_SETUP_TYPE:
         from strategies.archive.tokyo_range_expansion_failure import load_tref_config
@@ -677,6 +693,20 @@ def resample_to_m15(df: pd.DataFrame) -> pd.DataFrame:
         {"open": "first", "high": "max", "low": "min", "close": "last", "volume": "sum"}
     )
     return m15.dropna(subset=["open"]).reset_index()
+
+
+def resample_to_h4(df: pd.DataFrame) -> pd.DataFrame:
+    """H1 データを H4 へリサンプル（DBBS ATR 参照用）。"""
+    from strategies.bt_ohlcv import BtOhlcvFrame, resample_bars_ns
+
+    if df.empty:
+        return df
+    if isinstance(df, BtOhlcvFrame):
+        frame = df
+    else:
+        frame = BtOhlcvFrame.from_pandas(df)
+    bar_ns = int(np.timedelta64(240, "m") / np.timedelta64(1, "ns"))
+    return resample_bars_ns(frame, bar_ns).to_pandas()
 
 
 def compute_atr(df: pd.DataFrame, period: int = 14) -> pd.Series:
@@ -917,6 +947,8 @@ def _rule_base_l4_bypass_result(
         tags.append("LGR_L4_BYPASS")
     elif setup_type in TTM_SETUP_TYPES:
         tags.append("TTM_L4_BYPASS")
+    elif setup_type == DBBS_SETUP_TYPE:
+        tags.append("DBBS_L4_BYPASS")
     else:
         tags.append("RULE_BASE_L4_BYPASS")
     if htf_would_block:
@@ -930,7 +962,7 @@ def has_rule_base_l4_bypass_tag(tags: list[str] | tuple[str, ...]) -> bool:
     tag_set = set(tags)
     return bool(
         tag_set
-        & {"L4_BYPASS", "LSFC_L4_BYPASS", "ALS_L4_BYPASS", "TREF_L4_BYPASS", "CSPA_L4_BYPASS", "WYCKOFF_L4_BYPASS", "LGR_L4_BYPASS", "TTM_L4_BYPASS", "RULE_BASE_L4_BYPASS"}
+        & {"L4_BYPASS", "LSFC_L4_BYPASS", "ALS_L4_BYPASS", "TREF_L4_BYPASS", "CSPA_L4_BYPASS", "WYCKOFF_L4_BYPASS", "LGR_L4_BYPASS", "TTM_L4_BYPASS", "DBBS_L4_BYPASS", "RULE_BASE_L4_BYPASS"}
     )
 
 
@@ -1106,6 +1138,8 @@ def _setup_type_for_llm(setup: Any) -> str:
         return LGR_SETUP_TYPE
     if isinstance(setup, DiNapoliSetup):
         return DINAPOLI_SETUP_TYPE
+    if isinstance(setup, DbbsSetup):
+        return DBBS_SETUP_TYPE
     return "LONDON_CONTINUATION"
 
 
@@ -2105,6 +2139,12 @@ def _evaluate_setup_at_timestamp(
         has_bos = False
         atr_ratio = float(raw.get("pre_ttm_atr_ratio", 0.0))
         both_sweep = False
+    elif setup_type == DBBS_SETUP_TYPE:
+        smt = 0.0
+        smt_feats = SMTFeatures(intensity=0.0, diff=0.0, leader="NONE")
+        has_bos = False
+        atr_ratio = float(raw.get("bb20_width_atr_ratio", 1.0) or 1.0)
+        both_sweep = False
     else:
         smt = float(raw["smt_intensity"])
         smt_feats = SMTFeatures(
@@ -2206,6 +2246,13 @@ def _evaluate_setup_at_timestamp(
         and is_lgr_bayes_gate_enabled()
         and lgr_bayes_regime == "REJECT"
     )
+    dbbs_bear_kill_reject = (
+        setup_type == DBBS_SETUP_TYPE
+        and (
+            strategy_result.strategy_action == "REJECT"
+            or bool(raw.get("bear_kill_switch_active"))
+        )
+    )
 
     llm_confidence_score = 0
     llm_reason_summary = ""
@@ -2243,6 +2290,14 @@ def _evaluate_setup_at_timestamp(
         tags = [lgr_bayes_regime, lgr_bayes_reason]
         risk_score, latency, llm_decision, llm_confidence_score, llm_reason_summary = 0, 0, "REJECT", 0, ""
         decision_source = LGR_BAYES_REJECT_SOURCE
+        llm_eligible = False
+    elif dbbs_bear_kill_reject:
+        tags = ["BEAR_KILL_SWITCH_V2"]
+        last3 = raw.get("last_3_avg_r")
+        if last3 is not None and np.isfinite(float(last3)):
+            tags.append(f"LAST3_AVG_R_{float(last3):.2f}")
+        risk_score, latency, llm_decision, llm_confidence_score, llm_reason_summary = 0, 0, "REJECT", 0, ""
+        decision_source = "REJECT_BY_BEAR_KILL_SWITCH"
         llm_eligible = False
     elif l2_fail:
         tags, risk_score, latency, llm_decision, llm_confidence_score, llm_reason_summary = _skipped_llm_audit()
@@ -2730,6 +2785,33 @@ def _evaluate_setup_at_timestamp(
             tags.append("DN_PROP_MIDDLE")
         elif dn_prop_gate_tier == "Low" and "DN_PROP_LOW" not in tags:
             tags.append("DN_PROP_LOW")
+
+    if (
+        setup_type == DBBS_SETUP_TYPE
+        and not is_reject
+        and lot_factor > 0.0
+        and isinstance(setup, DbbsSetup)
+    ):
+        edge_mult = float(raw.get("edge_risk_mult", 1.0) or 1.0)
+        if edge_mult <= 0.0:
+            decision_source = "REJECT_BY_BEAR_KILL_SWITCH"
+            is_reject = True
+            lot_factor = 0.0
+            lot_size = 0.0
+            risk_budget = 0.0
+            trade_risk_pct = 0.0
+            if "BEAR_KILL_SWITCH_V2" not in tags:
+                tags.append("BEAR_KILL_SWITCH_V2")
+        elif edge_mult < 1.0:
+            lot_factor = round(lot_factor * edge_mult, 4)
+            lot_factor = audit_rm.apply_lot_factor_floor(lot_factor)
+            base_risk_pct = account.resolved_base_risk_pct()
+            risk_budget = round(equity_snapshot * base_risk_pct * lot_factor, 2)
+            lot_size = audit_rm.lot_from_risk_budget(
+                risk_budget, sl_distance, lot_factor
+            )
+            if "DBBS_EDGE_RISK" not in tags:
+                tags.append("DBBS_EDGE_RISK")
 
     trade_risk_pct = compute_trade_risk_pct(base_risk_pct, lot_factor)
     if not is_reject and trade_risk_pct > 0.0 and not defense_pure:
@@ -3628,6 +3710,34 @@ def _pair_dataframes(
     return gbp_df, eur_df, h1_gbp, h1_eur
 
 
+def _detect_setups_for_live_strategy(
+    strategy: BaseStrategy,
+    gbp_df: pd.DataFrame,
+    eur_df: pd.DataFrame,
+    h1_gbp: pd.DataFrame,
+    h1_eur: pd.DataFrame,
+) -> tuple[list[SetupUnion], list[SetupUnion], pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    """
+    Live セットアップ検出 — 戦略ごとに exec/structure 足種を解決する。
+
+    DBBS: exec M15 / structure H1 / ATR H4（M5 バッファからリサンプル）。
+    """
+    from strategies.dbbs import DbbsStrategy
+
+    if isinstance(strategy, DbbsStrategy):
+        m15_gbp = resample_to_m15(gbp_df) if not gbp_df.empty else gbp_df
+        m15_eur = resample_to_m15(eur_df) if not eur_df.empty else eur_df
+        h4_gbp = resample_to_h4(h1_gbp) if not h1_gbp.empty else h1_gbp
+        h4_eur = resample_to_h4(h1_eur) if not h1_eur.empty else h1_eur
+        gbp_setups = strategy.detect_setups(m15_gbp, "GBPUSD", h1_gbp, h4_gbp) if not m15_gbp.empty else []
+        eur_setups = strategy.detect_setups(m15_eur, "EURUSD", h1_eur, h4_eur) if not m15_eur.empty else []
+        return gbp_setups, eur_setups, m15_gbp, m15_eur, h1_gbp, h1_eur
+
+    gbp_setups = strategy.detect_setups(gbp_df, "GBPUSD", h1_gbp) if not gbp_df.empty else []
+    eur_setups = strategy.detect_setups(eur_df, "EURUSD", h1_eur) if not eur_df.empty else []
+    return gbp_setups, eur_setups, gbp_df, eur_df, h1_gbp, h1_eur
+
+
 def _find_active_setup(
     setups: list[SetupUnion],
     pair: str,
@@ -3667,6 +3777,11 @@ def evaluate_precomputed_setup(
     elif isinstance(setup, TrefSetup):
         h1_gbp = resample_to_h1(gbp_df) if not gbp_df.empty else gbp_df
         h1_eur = resample_to_h1(eur_df) if not eur_df.empty else eur_df
+    elif isinstance(setup, DbbsSetup):
+        h1_gbp = resample_to_h1(gbp_df) if not gbp_df.empty else gbp_df
+        h1_eur = resample_to_h1(eur_df) if not eur_df.empty else eur_df
+        gbp_df = resample_to_m15(gbp_df) if not gbp_df.empty else gbp_df
+        eur_df = resample_to_m15(eur_df) if not eur_df.empty else eur_df
     elif structure_h1_gbp is not None and structure_h1_eur is not None:
         h1_gbp, h1_eur = structure_h1_gbp, structure_h1_eur
     else:
@@ -3879,8 +3994,9 @@ def evaluate_trade_signal_with_pending(
         )
 
     london = live_strategies[0]
-    gbp_setups = london.detect_setups(gbp_df, "GBPUSD", h1_gbp) if not gbp_df.empty else []
-    eur_setups = london.detect_setups(eur_df, "EURUSD", h1_eur) if not eur_df.empty else []
+    gbp_setups, eur_setups, track_gbp, track_eur, h1_gbp, h1_eur = _detect_setups_for_live_strategy(
+        london, gbp_df, eur_df, h1_gbp, h1_eur
+    )
 
     active = _find_active_setup(
         gbp_setups if pair == "GBPUSD" else eur_setups,
@@ -3890,8 +4006,9 @@ def evaluate_trade_signal_with_pending(
     matched_strategy = london
     if active is None:
         for strategy in live_strategies[1:]:
-            gbp_setups = strategy.detect_setups(gbp_df, "GBPUSD", h1_gbp) if not gbp_df.empty else []
-            eur_setups = strategy.detect_setups(eur_df, "EURUSD", h1_eur) if not eur_df.empty else []
+            gbp_setups, eur_setups, track_gbp, track_eur, h1_gbp, h1_eur = _detect_setups_for_live_strategy(
+                strategy, gbp_df, eur_df, h1_gbp, h1_eur
+            )
             active = _find_active_setup(
                 gbp_setups if pair == "GBPUSD" else eur_setups,
                 pair,
@@ -3927,8 +4044,9 @@ def evaluate_trade_signal_with_pending(
             None,
         )
 
-    gbp_setups = matched_strategy.detect_setups(gbp_df, "GBPUSD", h1_gbp) if not gbp_df.empty else []
-    eur_setups = matched_strategy.detect_setups(eur_df, "EURUSD", h1_eur) if not eur_df.empty else []
+    gbp_setups, eur_setups, track_gbp, track_eur, h1_gbp, h1_eur = _detect_setups_for_live_strategy(
+        matched_strategy, gbp_df, eur_df, h1_gbp, h1_eur
+    )
     gbp_s = _find_active_setup(gbp_setups, "GBPUSD", bar_timestamp)
     eur_s = _find_active_setup(eur_setups, "EURUSD", bar_timestamp)
     if active.pair == "GBPUSD":
@@ -3964,8 +4082,8 @@ def evaluate_trade_signal_with_pending(
         daily_loss_fraction,
         h1_gbp,
         h1_eur,
-        gbp_df,
-        eur_df,
+        track_gbp,
+        track_eur,
         state.bayes_engine,
         tref_bayes_filter=state.tref_bayes,
         minutes_to_news_override=minutes_to_news,

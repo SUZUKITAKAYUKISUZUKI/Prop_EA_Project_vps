@@ -2,13 +2,13 @@
 
 本フォルダは **開発リポジトリ (`Prop_EA_Project`) から同期される VPS 実運用用の最小セット** です。
 
-- 本番戦略: **LSFC (A) + DiNapoli (C)** — 共有エクイティ A+C ポートフォリオ
+- 本番戦略: **LSFC (A) + Dual Bollinger Band Squeeze (B) + DiNapoli (C)** — 共有エクイティ A+B+C ポートフォリオ
 - **CSPA (旧 B)** はアーカイブ（VPS Live 対象外。`main_platform` 互換のため archive コードのみ同梱）
 - BT / WFT / 巨大 CSV / checkpoints は **含みません**（DN Prop Gate 用モデル JSON のみ同梱）
 
 同期手順の詳細: [`VPS_MIN_SYNC_GUIDE.md`](./VPS_MIN_SYNC_GUIDE.md)
 
-## VPS 推奨 `.env`（A+C 本番）
+## VPS 推奨 `.env`（A+B+C 本番）
 
 ```ini
 GEMINI_API_KEY=your_key_here
@@ -16,6 +16,10 @@ DINAPOLI_DEFENSE=1
 DN_PROP_GATE=1
 CHALLENGE_BASE_RISK_PCT_MAX=0.006
 DN_PROP_GATE_BASE_RISK_PCT=0.006
+DBBS_DEFENSE=1
+DBBS_PURE_DATA_MODE=0
+DBBS_BEAR_KILL_SWITCH=1
+DBBS_BEAR_KILL_SWITCH_THRESHOLD=0.20
 PROFIT_CUSHION_ENABLED=1
 TWIN_BRAKE_ENABLED=1
 DD_THROTTLING_ENABLED=1
