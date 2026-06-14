@@ -18,6 +18,7 @@ VEXP_SETUP_TYPE = "VEXP_VOLATILITY_EXPANSION"
 DTPA_SETUP_TYPE = "DTPA"
 CSPA_SETUP_TYPE = "CSPA"
 DBBS_SETUP_TYPE = "DBBS"
+VAMR_SETUP_TYPE = "VAMR"
 WYCKOFF_SETUP_TYPE = "WYCKOFF_REVERSAL"
 WYCKOFF_SETUP_TYPE_LEGACY = "WYCKOFF_SPRING"
 WYCKOFF_SETUP_TYPES = frozenset({WYCKOFF_SETUP_TYPE, WYCKOFF_SETUP_TYPE_LEGACY})
@@ -26,6 +27,7 @@ WYCKOFF_L2_MIN_SCORE = int(os.getenv("WYCKOFF_L2_MIN_SCORE", "50"))
 DTPA_L2_MIN_SCORE = int(os.getenv("DTPA_L2_MIN_SCORE", "70"))
 CSPA_L2_MIN_SCORE = int(os.getenv("CSPA_L2_MIN_SCORE", "65"))
 DBBS_L2_MIN_SCORE = int(os.getenv("DBBS_L2_MIN_SCORE", "0"))
+VAMR_L2_MIN_SCORE = int(os.getenv("VAMR_L2_MIN_SCORE", "0"))
 DTPA_LLM_REJECT_BELOW = int(os.getenv("DTPA_LLM_REJECT_BELOW", "65"))
 DTPA_LLM_ALLOW_MIN = int(os.getenv("DTPA_LLM_ALLOW_MIN", "85"))
 DTPA_LLM_CAUTION_MULT = float(os.getenv("DTPA_LLM_CAUTION_MULT", "0.5"))
@@ -49,6 +51,7 @@ def resolve_l2_min_candidate_score(setup_type: str, profile_default: int = 30) -
     | DTPA | F | 70（粗い L2 足切り） |
     | CSPA | G | 65（専用 L2 スコア） |
     | DBBS | B | 0（candidate_score 未使用） |
+    | VAMR | D | 0（candidate_score 未使用） |
     | WR | H | 50（プロトタイプ） |
 
 CSPA L3.5 ベイズ: ``audit.cspa_bayes_gate.evaluate_cspa_bayes_gate`` — CSPABayesEngine 3-Tier
@@ -61,6 +64,8 @@ CSPA L3.5 ベイズ: ``audit.cspa_bayes_gate.evaluate_cspa_bayes_gate`` — CSPA
         return CSPA_L2_MIN_SCORE
     if setup_type == DBBS_SETUP_TYPE:
         return DBBS_L2_MIN_SCORE
+    if setup_type == VAMR_SETUP_TYPE:
+        return VAMR_L2_MIN_SCORE
     if setup_type in WYCKOFF_SETUP_TYPES:
         return WYCKOFF_L2_MIN_SCORE
     if setup_type == FVG_SETUP_TYPE:

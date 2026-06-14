@@ -21,21 +21,21 @@ from strategies.dbbs import (
     DbbsSetup,
     DbbsStrategy,
 )
-from strategies.lbo import (
-    STRATEGY_ABBREV as LBO_ABBREV,
-    STRATEGY_FULL_NAME as LBO_FULL_NAME,
-    LboSetup,
-    LboStrategy,
-)
+from strategies.dbbs_common import DBBSG_ABBREV, DBBSG_FULL_NAME, DBBSG_PAIR, DBBS_PAIR_XAU
 from strategies.dinapoli import (
     STRATEGY_ABBREV as DINAPOLI_ABBREV,
     STRATEGY_FULL_NAME as DINAPOLI_FULL_NAME,
     DiNapoliSetup,
     DiNapoliStrategy,
 )
+from strategies.vamr import (
+    STRATEGY_ABBREV as VAMR_ABBREV,
+    STRATEGY_FULL_NAME as VAMR_FULL_NAME,
+    VamrStrategy,
+)
 StrategyModeKey = Literal[
-    "lsfc", "als", "fvg", "tref", "vexp", "dtpa", "cspa", "wyckoff", "lgr", "ttm", "dbbs", "dinapoli", "lbo",
-    "continuation", "main", "all", "ab", "ac", "bc", "abc", "abcd", "abcdn",
+    "lsfc", "als", "fvg", "tref", "vexp", "dtpa", "cspa", "wyckoff", "lgr", "ttm", "dbbs", "dbbsg", "dinapoli", "vamr", "adre", "adre_v2",
+    "continuation", "main", "all", "ab", "ac", "bc", "abc", "abcg", "abcd", "abcdn",
 ]
 
 # 実運用 (MT5 Bridge) で発注可能な mode — A～Z letter 割当のみ。
@@ -43,47 +43,55 @@ STRATEGY_LETTER_BY_MODE: dict[str, str] = {
     "lsfc": "A",
     "dbbs": "B",
     "dinapoli": "C",
+    "vamr": "D",
 }
 STRATEGY_LETTER_BY_SETUP_TYPE: dict[str, str] = {
     "LONDON_SWEEP_FAILURE_CONTINUATION": "A",
     "DBBS": "B",
     "DINAPOLI_STRUCTURE": "C",
+    "VAMR": "D",
 }
 SETUP_TYPE_BY_STRATEGY_LETTER: dict[str, str] = {
     letter: setup_type for setup_type, letter in STRATEGY_LETTER_BY_SETUP_TYPE.items()
 }
-# B — dbbs (DBBS): Dual Bollinger Band Squeeze + Bear Kill Switch V2（本番採用）
+# B — dbbs (DBBS): Dual Bollinger Band Squeeze + Bear Kill Switch V2（EURUSD/GBPUSD/XAUUSD 本番採用）
 # B — cspa (CSPA): アーカイブ — 検証の結果、プロップ用ポートフォリオには向いていない
+# C — dinapoli (DN): DiNapoli Structure + DN Prop Gate V1
+# D — vamr (VAMR): Volume Area Mean Reversion to POC（AUDNZD/EURGBP/USDCAD）
 # D — ttm: 仲値流動性イベント特徴量収集（執行 M1 / 構造 M5 / ATR M15）
 # H — wyckoff (WR): アーカイブ — 新戦略 Liquidity Grab Reversal (LGR) 構築に向けての発展的廃止
 # I — lgr (LGR): アーカイブ — プロップ向きでない（自己資金口座向けに優秀）
+# J — adre (ADRE): アーカイブ — プロップファーム向きではない（2026-06-13）
 
 STRATEGY_ABBREV_BY_MODE: dict[str, str] = {
     "lsfc": "LSFC",
     "dbbs": DBBS_ABBREV,
-    "lbo": LBO_ABBREV,
+    "dbbsg": DBBSG_ABBREV,
     "ttm": TTM_ABBREV,
     "dinapoli": DINAPOLI_ABBREV,
+    "vamr": VAMR_ABBREV,
 }
 
 STRATEGY_FULL_NAME_BY_MODE: dict[str, str] = {
     "dbbs": DBBS_FULL_NAME,
-    "lbo": LBO_FULL_NAME,
+    "dbbsg": DBBSG_FULL_NAME,
     "ttm": TTM_FULL_NAME,
     "dinapoli": DINAPOLI_FULL_NAME,
+    "vamr": VAMR_FULL_NAME,
 }
 
 STRATEGY_PRIORITY_ORDER: tuple[str, ...] = (
-    "lsfc", "dbbs", "lbo", "ttm", "dinapoli",
+    "lsfc", "dbbs", "dinapoli", "vamr", "ttm",
 )
 
 # (mode_key, strategy class) — archive 外の全実装。BT 用。
 STRATEGY_CLASS_REGISTRY: tuple[tuple[str, type[BaseStrategy]], ...] = (
     ("lsfc", LondonSweepFailureStrategy),
     ("dbbs", DbbsStrategy),
-    ("lbo", LboStrategy),
+    ("dbbsg", DbbsStrategy),
     ("ttm", TtmStrategy),
     ("dinapoli", DiNapoliStrategy),
+    ("vamr", VamrStrategy),
 )
 
 MODE_BY_STRATEGY_CLASS: dict[type[BaseStrategy], str] = {
@@ -93,7 +101,7 @@ MODE_BY_STRATEGY_CLASS: dict[type[BaseStrategy], str] = {
 DEPRECATED_STRATEGY_MODES: frozenset[str] = frozenset()
 
 ARCHIVED_STRATEGY_MODES: frozenset[str] = frozenset(
-    {"als", "dtpa", "vexp", "continuation", "tref", "fvg", "wyckoff", "lgr", "cspa"}
+    {"als", "dtpa", "vexp", "continuation", "tref", "fvg", "wyckoff", "lgr", "cspa", "adre", "adre_v2"}
 )
 
 PRODUCTION_STRATEGY_MODE: StrategyModeKey = "lsfc"
@@ -123,8 +131,13 @@ PORTFOLIO_AC_MODES: frozenset[str] = frozenset({"ac"})
 PORTFOLIO_AB_MODES: frozenset[str] = frozenset({"ab"})
 PORTFOLIO_BC_MODES: frozenset[str] = frozenset({"bc"})
 PORTFOLIO_ABC_MODES: frozenset[str] = frozenset({"abc", "abcd", "abcdn"})
+PORTFOLIO_ABCG_MODES: frozenset[str] = frozenset({"abcg"})
 MTF_PORTFOLIO_MODES: frozenset[str] = (
-    PORTFOLIO_AC_MODES | PORTFOLIO_AB_MODES | PORTFOLIO_BC_MODES | PORTFOLIO_ABC_MODES
+    PORTFOLIO_AC_MODES
+    | PORTFOLIO_AB_MODES
+    | PORTFOLIO_BC_MODES
+    | PORTFOLIO_ABC_MODES
+    | PORTFOLIO_ABCG_MODES
 )
 
 
@@ -135,7 +148,19 @@ def is_mtf_portfolio_mode(mode: str) -> bool:
 
 def portfolio_includes_dinapoli(mode: str) -> bool:
     """True when portfolio selector expands to a mode including DiNapoli."""
-    return mode in (PORTFOLIO_ABC_MODES | PORTFOLIO_AC_MODES | PORTFOLIO_BC_MODES)
+    return mode in (
+        PORTFOLIO_ABC_MODES | PORTFOLIO_ABCG_MODES | PORTFOLIO_AC_MODES | PORTFOLIO_BC_MODES
+    )
+
+
+def portfolio_includes_vamr(mode: str) -> bool:
+    """True when portfolio selector expands to a mode including VAMR (Strategy D)."""
+    return mode in PORTFOLIO_ABC_MODES
+
+
+def portfolio_includes_dbbsg(mode: str) -> bool:
+    """Deprecated alias — DBBSG merged into DBBS (XAUUSD pair)."""
+    return portfolio_includes_dbbs(mode)
 
 
 def portfolio_includes_dbbs(mode: str) -> bool:
@@ -161,6 +186,8 @@ def expand_strategy_modes(
         elif item == "all":
             expanded.append("lsfc")
         elif item in PORTFOLIO_ABC_MODES:
+            expanded.extend(["lsfc", "dbbs", "dinapoli", "vamr"])
+        elif item in PORTFOLIO_ABCG_MODES:
             expanded.extend(["lsfc", "dbbs", "dinapoli"])
         elif item in PORTFOLIO_AB_MODES:
             expanded.extend(["lsfc", "dbbs"])
@@ -168,6 +195,8 @@ def expand_strategy_modes(
             expanded.extend(["lsfc", "dinapoli"])
         elif item in PORTFOLIO_BC_MODES:
             expanded.extend(["dbbs", "dinapoli"])
+        elif item == "dbbsg":
+            expanded.append("dbbsg")
         else:
             expanded.append(item)
     return tuple(expanded)
@@ -229,10 +258,10 @@ __all__ = [
     "DbbsStrategy",
     "DBBS_ABBREV",
     "DBBS_FULL_NAME",
-    "LboSetup",
-    "LboStrategy",
-    "LBO_ABBREV",
-    "LBO_FULL_NAME",
+    "DBBSG_ABBREV",
+    "DBBSG_FULL_NAME",
+    "DBBSG_PAIR",
+    "DBBS_PAIR_XAU",
     "DiNapoliSetup",
     "DiNapoliStrategy",
     "DINAPOLI_FULL_NAME",
@@ -246,12 +275,18 @@ __all__ = [
     "is_mtf_portfolio_mode",
     "MTF_PORTFOLIO_MODES",
     "PORTFOLIO_ABC_MODES",
+    "PORTFOLIO_ABCG_MODES",
     "PORTFOLIO_AB_MODES",
     "PORTFOLIO_AC_MODES",
     "PORTFOLIO_BC_MODES",
     "portfolio_includes_dbbs",
+    "portfolio_includes_dbbsg",
     "portfolio_includes_dinapoli",
+    "portfolio_includes_vamr",
     "portfolio_needs_h4",
+    "VamrStrategy",
+    "VAMR_ABBREV",
+    "VAMR_FULL_NAME",
     "resolve_strategy_mode",
     "strategy_priority_index",
 ]

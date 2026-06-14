@@ -143,9 +143,11 @@ notepad .env
 ```
 
 3. `.env` に `GEMINI_API_KEY` を記入 → 保存  
-4. `.env` を **A+B+C 本番** に合わせる（`deploy/.env.example` 参照）  
+4. `.env` を **A+B+C+D 本番** に合わせる（`deploy/.env.example` 参照）  
    - `DINAPOLI_DEFENSE=1` / `DN_PROP_GATE=1`  
    - `DBBS_DEFENSE=1` / `DBBS_BEAR_KILL_SWITCH=1`  
+   - `VAMR_DEFENSE=1` / `PROFIT_CUSHION_LOT_MULT=0.65`  
+   - **`PORTFOLIO_ALLOCATION_ENABLED=0`**（本番既定 — 戦略別ウェイトなし）  
    - **`MUTUAL_EXCLUSION_MODE=daily` があれば削除**（`MUTUAL_EXCLUSION_ENABLED=1` のみ）  
 5. `start_mt5_bridge.bat` をダブルクリック（再起動）  
 6. MT5 で **`PropEA_Bridge.mq5` を再コンパイル・再アタッチ**（`open_positions` 送信対応）

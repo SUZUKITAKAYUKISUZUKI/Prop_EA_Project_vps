@@ -42,8 +42,9 @@ PORTFOLIO_LOT_MULTIPLIER = float(
 
 # --- 利益クッション（+N% 防護壁まで lot 縮小 — 失格リスク低減）---
 DEFAULT_PROFIT_CUSHION_TARGET_PCT = 2.0
-DEFAULT_PROFIT_CUSHION_LOT_MULT = 0.85
+DEFAULT_PROFIT_CUSHION_LOT_MULT = 0.65
 REASON_PROFIT_CUSHION_BRAKE = "PROFIT_CUSHION_BRAKE"
+REASON_STRATEGY_ALLOCATION_WEIGHT = "STRATEGY_ALLOCATION_WEIGHT"
 
 
 def is_profit_cushion_enabled() -> bool:
@@ -57,6 +58,15 @@ def profit_cushion_target_pct() -> float:
 
 def profit_cushion_lot_mult_below() -> float:
     return max(0.0, min(1.0, float(os.getenv("PROFIT_CUSHION_LOT_MULT", str(DEFAULT_PROFIT_CUSHION_LOT_MULT)))))
+
+
+def profit_cushion_mode() -> str:
+    """equity | trade_count | hybrid"""
+    return os.getenv("PROFIT_CUSHION_MODE", "equity").strip().lower()
+
+
+def profit_cushion_trade_count_limit() -> int:
+    return max(0, int(os.getenv("PROFIT_CUSHION_TRADE_COUNT", "0")))
 
 
 def is_profit_cushion_active_for_profile(profile: str) -> bool:
@@ -79,16 +89,33 @@ def profit_cushion_lot_multiplier(
     phase_start_equity: float,
     current_equity: float,
     profile: str = "challenge",
+    *,
+    trades_in_phase: int = 0,
 ) -> float:
     """
     フェーズ開始残高に対する +N% 防護壁（デフォルト +2%）を下回る間、
-    lot_factor を一律縮小（デフォルト ×0.85）。到達後は ×1.0。
+    lot_factor を一律縮小（デフォルト ×0.65 — 全戦略・全ポートフォリオ共通、D(VAMR) の有無に非依存）。
+    到達後は ×1.0。
+
+    Modes (PROFIT_CUSHION_MODE):
+    - equity: deactivate when current_equity >= target
+    - trade_count: deactivate after PROFIT_CUSHION_TRADE_COUNT trades
+    - hybrid: deactivate when equity target OR trade count reached (whichever first)
     """
     if not is_profit_cushion_active_for_profile(profile):
         return 1.0
-    if current_equity >= profit_cushion_target_equity(phase_start_equity):
-        return 1.0
-    return profit_cushion_lot_mult_below()
+
+    mult = profit_cushion_lot_mult_below()
+    mode = profit_cushion_mode()
+    trade_limit = profit_cushion_trade_count_limit()
+    equity_reached = current_equity >= profit_cushion_target_equity(phase_start_equity)
+    trade_limit_reached = trade_limit > 0 and trades_in_phase >= trade_limit
+
+    if mode == "trade_count":
+        return 1.0 if trade_limit_reached else mult
+    if mode == "hybrid":
+        return 1.0 if equity_reached or trade_limit_reached else mult
+    return 1.0 if equity_reached else mult
 
 
 def apply_profit_cushion_brake(
@@ -104,7 +131,9 @@ def apply_profit_cushion_brake(
 
     Returns: lot_factor, risk_budget, lot_size, cushion_mult
     """
-    cushion_mult = profit_cushion_lot_multiplier(phase_start_equity, equity, profile)
+    cushion_mult = profit_cushion_lot_multiplier(
+        phase_start_equity, equity, profile, trades_in_phase=0
+    )
     if cushion_mult >= 1.0 or lot_factor <= 0.0:
         risk_budget = round(equity * base_risk_pct * lot_factor, 2)
         lot_size = lot_from_risk_budget(risk_budget, sl_distance, lot_factor)
@@ -157,6 +186,79 @@ def apply_portfolio_lot_multiplier(lot_factor: float) -> float:
     if mult == 1.0:
         return lot_factor
     return round(lot_factor * mult, 4)
+
+
+def is_portfolio_allocation_enabled() -> bool:
+    raw = os.getenv("PORTFOLIO_ALLOCATION_ENABLED", "0").strip().lower()
+    return raw in ("1", "true", "yes", "on")
+
+
+def _parse_portfolio_strategy_weights_env() -> dict[str, float]:
+    import json
+    from pathlib import Path
+
+    weights: dict[str, float] = {}
+
+    file_path = os.getenv("PORTFOLIO_STRATEGY_WEIGHTS_FILE", "").strip()
+    if file_path:
+        path = Path(file_path)
+        if path.exists():
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            if isinstance(payload, dict) and "weights" in payload:
+                payload = payload["weights"]
+            if isinstance(payload, dict):
+                weights.update({str(k): float(v) for k, v in payload.items()})
+
+    raw_json = os.getenv("PORTFOLIO_STRATEGY_WEIGHTS", "").strip()
+    if raw_json:
+        payload = json.loads(raw_json)
+        if isinstance(payload, dict):
+            weights.update({str(k): float(v) for k, v in payload.items()})
+
+    label_map = {
+        "LSFC": "LONDON_SWEEP_FAILURE_CONTINUATION",
+        "DBBS": "DBBS",
+        "DINAPOLI": "DINAPOLI_STRUCTURE",
+        "VAMR": "VAMR",
+    }
+    for label, setup_type in label_map.items():
+        key = f"PORTFOLIO_WEIGHT_{label}"
+        val = os.getenv(key, "").strip()
+        if val:
+            weights[setup_type] = float(val)
+
+    cleaned: dict[str, float] = {}
+    for key, val in weights.items():
+        w = max(0.0, min(1.0, float(val)))
+        if w > 0.0:
+            cleaned[str(key).strip()] = w
+    return cleaned
+
+
+def portfolio_strategy_weights() -> dict[str, float]:
+    if not is_portfolio_allocation_enabled():
+        return {}
+    return _parse_portfolio_strategy_weights_env()
+
+
+def strategy_allocation_weight(setup_type: str) -> float:
+    """Per-strategy capital weight in [0, 1]. Default 1.0 when allocation disabled."""
+    if not is_portfolio_allocation_enabled():
+        return 1.0
+    weights = portfolio_strategy_weights()
+    if not weights:
+        return 1.0
+    key = str(setup_type or "").strip()
+    if key in weights:
+        return weights[key]
+    return 1.0
+
+
+def apply_strategy_allocation_weight(lot_factor: float, setup_type: str) -> float:
+    weight = strategy_allocation_weight(setup_type)
+    if weight == 1.0 or lot_factor <= 0.0:
+        return lot_factor
+    return round(lot_factor * weight, 4)
 
 
 @dataclass

@@ -153,6 +153,7 @@ string StrategyLetterFromSetupType(const string setup_type)
    if(setup_type == "LONDON_SWEEP_FAILURE_CONTINUATION") return "A";
    if(setup_type == "DBBS") return "B";
    if(setup_type == "DINAPOLI_STRUCTURE") return "C";
+   if(setup_type == "VAMR") return "D";
    return "";
 }
 
@@ -162,6 +163,7 @@ string SetupTypeFromStrategyLetter(const string letter)
    if(letter == "A") return "LONDON_SWEEP_FAILURE_CONTINUATION";
    if(letter == "B") return "DBBS";
    if(letter == "C") return "DINAPOLI_STRUCTURE";
+   if(letter == "D") return "VAMR";
    return "";
 }
 

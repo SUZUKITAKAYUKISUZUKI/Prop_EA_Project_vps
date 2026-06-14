@@ -112,15 +112,15 @@ from strategies.dbbs import (
     DbbsSetup,
     SETUP_TYPE as DBBS_SETUP_TYPE,
 )
-from strategies.lbo import (
-    LboSetup,
-    SETUP_TYPE as LBO_SETUP_TYPE,
-    is_lbo_defense_pure_mode,
-    is_lbo_l4_bypass,
-)
 from strategies.dbbs_common import (
     is_dbbs_defense_pure_mode,
     is_dbbs_l4_bypass,
+)
+from strategies.vamr import (
+    SETUP_TYPE as VAMR_SETUP_TYPE,
+    is_vamr_defense_pure_mode,
+    is_vamr_generic_bayes_bypass,
+    is_vamr_l4_bypass,
 )
 from strategies.ttm import (
     TtmSetup,
@@ -180,7 +180,7 @@ from strategies.mtf_timestamp import (
 )
 from strategies import get_registered_strategies
 
-SetupUnion = LsfcSetup | ContinuationSetup | AlsSetup | FvgFillSetup | TrefSetup | VexpSetup | DtpaSetup | CspaSetup | SpringSetup | LgrSetup | DbbsSetup | DiNapoliSetup | LboSetup
+SetupUnion = LsfcSetup | ContinuationSetup | AlsSetup | FvgFillSetup | TrefSetup | VexpSetup | DtpaSetup | CspaSetup | SpringSetup | LgrSetup | DbbsSetup | DiNapoliSetup
 
 # =============================================================================
 # ■ ユーザー設定定数（ここを書き換えるだけでモード切替）
@@ -456,8 +456,8 @@ def is_defense_pure_setup(setup_type: str) -> bool:
         return is_dinapoli_defense_pure_mode()
     if setup_type == DBBS_SETUP_TYPE:
         return is_dbbs_defense_pure_mode()
-    if setup_type == LBO_SETUP_TYPE:
-        return is_lbo_defense_pure_mode()
+    if setup_type == VAMR_SETUP_TYPE:
+        return is_vamr_defense_pure_mode()
     return False
 
 
@@ -503,10 +503,8 @@ def is_bayes_bypass_setup_type(setup_type: str) -> bool:
         from strategies.dbbs_common import is_dbbs_generic_bayes_bypass
 
         return is_dbbs_generic_bayes_bypass()
-    if setup_type == LBO_SETUP_TYPE:
-        from strategies.lbo import is_lbo_generic_bayes_bypass
-
-        return is_lbo_generic_bayes_bypass()
+    if setup_type == VAMR_SETUP_TYPE:
+        return is_vamr_generic_bayes_bypass()
     return setup_type in BAYES_BYPASS_SETUP_TYPES
 
 
@@ -532,7 +530,7 @@ def is_l4_bypass_setup_type(setup_type: str) -> bool:
         return True
     if setup_type == DBBS_SETUP_TYPE and is_dbbs_l4_bypass():
         return True
-    if setup_type == LBO_SETUP_TYPE and is_lbo_l4_bypass():
+    if setup_type == VAMR_SETUP_TYPE and is_vamr_l4_bypass():
         return True
     if setup_type == TREF_SETUP_TYPE:
         from strategies.archive.tokyo_range_expansion_failure import load_tref_config
@@ -643,7 +641,6 @@ CSV_COLUMNS = [
     "wyckoff_features",
     "lgr_features",
     "ttm_features",
-    "lbo_features",
     "vp_zone",
     "l2_regime",
     "l2_base_lot_factor",
@@ -964,6 +961,8 @@ def _rule_base_l4_bypass_result(
         tags.append("TTM_L4_BYPASS")
     elif setup_type == DBBS_SETUP_TYPE:
         tags.append("DBBS_L4_BYPASS")
+    elif setup_type == VAMR_SETUP_TYPE:
+        tags.append("VAMR_L4_BYPASS")
     else:
         tags.append("RULE_BASE_L4_BYPASS")
     if htf_would_block:
@@ -977,7 +976,7 @@ def has_rule_base_l4_bypass_tag(tags: list[str] | tuple[str, ...]) -> bool:
     tag_set = set(tags)
     return bool(
         tag_set
-        & {"L4_BYPASS", "LSFC_L4_BYPASS", "ALS_L4_BYPASS", "TREF_L4_BYPASS", "CSPA_L4_BYPASS", "WYCKOFF_L4_BYPASS", "LGR_L4_BYPASS", "TTM_L4_BYPASS", "DBBS_L4_BYPASS", "RULE_BASE_L4_BYPASS"}
+        & {"L4_BYPASS", "LSFC_L4_BYPASS", "ALS_L4_BYPASS", "TREF_L4_BYPASS", "CSPA_L4_BYPASS", "WYCKOFF_L4_BYPASS", "LGR_L4_BYPASS", "TTM_L4_BYPASS", "DBBS_L4_BYPASS", "VAMR_L4_BYPASS", "RULE_BASE_L4_BYPASS"}
     )
 
 
@@ -2160,16 +2159,12 @@ def _evaluate_setup_at_timestamp(
         has_bos = False
         atr_ratio = float(raw.get("bb20_width_atr_ratio", 1.0) or 1.0)
         both_sweep = False
-    elif setup_type == LBO_SETUP_TYPE:
-        smt = float(raw.get("smt_intensity", 0.0))
-        smt_feats = SMTFeatures(
-            intensity=smt,
-            diff=float(raw.get("smt_diff", 0.0)),
-            leader=str(raw.get("smt_leader", "NONE")),
-        )
+    elif setup_type == VAMR_SETUP_TYPE:
+        smt = 0.0
+        smt_feats = SMTFeatures(intensity=0.0, diff=0.0, leader="NONE")
         has_bos = False
-        atr_ratio = float(raw.get("breakout_candle_atr_ratio", 1.0) or 1.0)
-        both_sweep = bool(raw.get("both_broke", False))
+        atr_ratio = float(raw.get("atr_vs_session_avg", 1.0) or 1.0)
+        both_sweep = False
     else:
         smt = float(raw["smt_intensity"])
         smt_feats = SMTFeatures(
@@ -2252,6 +2247,9 @@ def _evaluate_setup_at_timestamp(
             bayes_hard_reject = check_wyckoff_bayes_hard_reject(bayes_probability)
         else:
             bayes_hard_reject = False
+    elif setup_type == VAMR_SETUP_TYPE:
+        bayes_probability = float(raw.get("bayes_probability", 0.0) or 0.0)
+        bayes_hard_reject = False
     elif is_bayes_bypass_setup_type(setup_type):
         bayes_probability = BAYES_BYPASS_NEUTRAL_PROBABILITY
         bayes_hard_reject = False
@@ -2277,6 +2275,10 @@ def _evaluate_setup_at_timestamp(
             strategy_result.strategy_action == "REJECT"
             or bool(raw.get("bear_kill_switch_active"))
         )
+    )
+    vamr_signal_reject = (
+        setup_type == VAMR_SETUP_TYPE
+        and strategy_result.strategy_action == "REJECT"
     )
 
     llm_confidence_score = 0
@@ -2323,6 +2325,12 @@ def _evaluate_setup_at_timestamp(
             tags.append(f"LAST3_AVG_R_{float(last3):.2f}")
         risk_score, latency, llm_decision, llm_confidence_score, llm_reason_summary = 0, 0, "REJECT", 0, ""
         decision_source = "REJECT_BY_BEAR_KILL_SWITCH"
+        llm_eligible = False
+    elif vamr_signal_reject:
+        reason = str(raw.get("reject_reason") or "VAMR")
+        tags = [reason]
+        risk_score, latency, llm_decision, llm_confidence_score, llm_reason_summary = 0, 0, "REJECT", 0, ""
+        decision_source = f"REJECT_BY_{reason}"
         llm_eligible = False
     elif l2_fail:
         tags, risk_score, latency, llm_decision, llm_confidence_score, llm_reason_summary = _skipped_llm_audit()
@@ -2595,6 +2603,12 @@ def _evaluate_setup_at_timestamp(
 
     if not defense_pure:
         lot_factor = audit_rm.apply_portfolio_lot_multiplier(lot_factor)
+        lot_factor = audit_rm.apply_strategy_allocation_weight(lot_factor, setup_type)
+        alloc_w = audit_rm.strategy_allocation_weight(setup_type)
+        if audit_rm.is_portfolio_allocation_enabled() and alloc_w != 1.0:
+            tag = f"{audit_rm.REASON_STRATEGY_ALLOCATION_WEIGHT}_{alloc_w:.3f}"
+            if tag not in tags:
+                tags.append(tag)
     if lot_factor > 0.0:
         lot_factor = audit_rm.apply_lot_factor_floor(lot_factor)
         risk_budget = round(equity_snapshot * base_risk_pct * lot_factor, 2)
@@ -2757,6 +2771,23 @@ def _evaluate_setup_at_timestamp(
             trade_risk_pct = 0.0
             if "TTM_EV_BOTTOM20_REJECT" not in tags:
                 tags.append("TTM_EV_BOTTOM20_REJECT")
+
+    vamr_size_multiplier = 1.0
+    if (
+        setup_type == VAMR_SETUP_TYPE
+        and not is_reject
+        and lot_factor > 0.0
+    ):
+        vamr_size_multiplier = float(raw.get("vamr_size_multiplier", 1.0) or 1.0)
+        lot_factor = round(lot_factor * vamr_size_multiplier, 4)
+        lot_factor = audit_rm.apply_lot_factor_floor(lot_factor)
+        base_risk_pct = account.resolved_base_risk_pct()
+        risk_budget = round(equity_snapshot * base_risk_pct * lot_factor, 2)
+        lot_size = audit_rm.lot_from_risk_budget(
+            risk_budget, sl_distance, lot_factor
+        )
+        if "VAMR_MODEL_B_SIZING" not in tags:
+            tags.append("VAMR_MODEL_B_SIZING")
 
     dn_ev_rank_v2 = 0.0
     dn_prop_gate_tier = ""
@@ -3114,7 +3145,7 @@ def _apply_trade_outcome(
         if shadow_result == "WIN":
             account.consecutive_losses = 0
 
-    return {
+    out: dict[str, Any] = {
         "trade_id": pending.trade_id,
         "timestamp": setup.timestamp.strftime("%Y-%m-%d %H:%M:%S"),
         "pair": setup.pair,
@@ -3178,6 +3209,7 @@ def _apply_trade_outcome(
         "_setup": setup,
         "_pending": pending,
     }
+    return out
 
 
 # =============================================================================

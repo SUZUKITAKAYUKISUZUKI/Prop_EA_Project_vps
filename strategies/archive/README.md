@@ -28,9 +28,14 @@
 | `liquidity_grab_detector.py` | LGR detector | 同上 |
 | `lgr_scan_hot.py` / `lgr_scan_numba.py` | LGR scan | 同上 |
 | `lgr_detector_debug.py` | LGR debug | 同上 |
+| `adre.py` / `adre_detector.py` / `adre_v2_fixed.py` | **ADRE (J)** | **プロップファーム向きではない**（2026-06-13） |
 | `reversal_feature_helpers.py` / `_np.py` | LGR/WR 特徴量 | LGR アーカイブに伴い移動 |
 
 LGR 関連サポート（Bayes / EV / Optuna）: `archive/lgr/` — 詳細は `archive/lgr/README.md`
+
+ADRE 関連（Bayes / V2 / validation）: `archive/adre/` — 詳細は `archive/adre/README.md`
+
+CSST 関連（通貨強弱状態遷移 / time exit 研究）: `archive/csst/` — 詳細は `archive/csst/README.md`。**プロップ向きではない**（中長期デイトレ〜スイング向き時間依存型、2026-06-13 アーカイブ）
 
 ## 現行 letter マップ（2026-06-01）
 
@@ -42,6 +47,7 @@ LGR 関連サポート（Bayes / EV / Optuna）: `archive/lgr/` — 詳細は `a
 | **D** | — | 未割当（旧 TREF） |
 | **H** | `wyckoff` | **アーカイブ** |
 | **I** | `lgr` | **アーカイブ** — プロップ向きでない（自己資金口座向けに優秀） |
+| **J** | `adre` / `adre_v2` | **アーカイブ** — プロップファーム向きではない |
 
 ## 注意
 

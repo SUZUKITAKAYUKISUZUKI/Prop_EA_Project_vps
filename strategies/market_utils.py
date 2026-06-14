@@ -16,7 +16,7 @@ NY_ENTRY_HOUR = 21
 LONDON_SESSION_HOURS = range(LONDON_SESSION_HOUR_START, LONDON_SESSION_HOUR_END + 1)
 
 # BT / Live: 第1スロット（gbp_df）に載せるペア
-PRIMARY_SLOT_PAIRS = frozenset({"GBPUSD", "AUDUSD", "AUDJPY"})
+PRIMARY_SLOT_PAIRS = frozenset({"GBPUSD", "AUDUSD", "AUDJPY", "XAUUSD"})
 CORRELATED_PAIR = {
     "GBPUSD": "EURUSD",
     "EURUSD": "GBPUSD",
@@ -24,12 +24,28 @@ CORRELATED_PAIR = {
     "NZDUSD": "AUDUSD",
     "AUDJPY": "USDJPY",
     "USDJPY": "AUDJPY",
+    "XAUUSD": "XAUUSD",
 }
+
+_BT_PAIR_FRAME_REGISTRY: dict[str, pd.DataFrame] | None = None
+
+
+def set_bt_pair_frame_registry(registry: dict[str, pd.DataFrame] | None) -> None:
+    """BT-only: map pair -> OHLCV for multi-pair discovery runs (e.g. ADRE)."""
+    global _BT_PAIR_FRAME_REGISTRY
+    _BT_PAIR_FRAME_REGISTRY = registry
+
+
+def get_bt_pair_frame_registry() -> dict[str, pd.DataFrame] | None:
+    return _BT_PAIR_FRAME_REGISTRY
 
 
 def pip_size_for_pair(pair: str) -> float:
-    """ペアごとの pip サイズ（JPY クロスは 0.01、それ以外は 0.0001）。"""
-    return JPY_PIP_SIZE if str(pair).upper().endswith("JPY") else PIP_SIZE
+    """ペアごとの pip サイズ（JPY / XAUUSD は 0.01、それ以外は 0.0001）。"""
+    upper = str(pair).upper()
+    if upper.endswith("JPY") or upper in {"XAUUSD", "GOLD"}:
+        return JPY_PIP_SIZE
+    return PIP_SIZE
 
 
 def uses_primary_dataframe(pair: str) -> bool:
@@ -46,6 +62,10 @@ def pair_dataframe_slot(
 ) -> pd.DataFrame:
     """BT 用: ペアに対応する gbp/eur OHLCV スロットを返す。"""
     del setup_type
+    if _BT_PAIR_FRAME_REGISTRY is not None:
+        frame = _BT_PAIR_FRAME_REGISTRY.get(str(pair).upper())
+        if frame is not None:
+            return frame
     return gbp_df if uses_primary_dataframe(pair) else eur_df
 
 

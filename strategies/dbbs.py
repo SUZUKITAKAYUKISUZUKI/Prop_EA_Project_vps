@@ -174,12 +174,9 @@ def detect_dbbs_setups(
     h4_df: pd.DataFrame | None = None,
 
 ) -> list[DbbsSetup]:
-    from strategies.bt_ohlcv import BtOhlcvFrame
+    from strategies.bt_ohlcv import BtOhlcvFrame, as_ohlcv, ts_ns_to_pd
 
-    if isinstance(m15_df, BtOhlcvFrame):
-        m15_df = m15_df.to_pandas()
-    if isinstance(h1_df, BtOhlcvFrame):
-        h1_df = h1_df.to_pandas()
+    h1_input = h1_df.to_pandas() if isinstance(h1_df, BtOhlcvFrame) else h1_df
     if h4_df is not None and isinstance(h4_df, BtOhlcvFrame):
         h4_df = h4_df.to_pandas()
 
@@ -187,21 +184,25 @@ def detect_dbbs_setups(
 
         return []
 
-    if pair not in ALLOWED_PAIRS or m15_df is None or h1_df is None:
+    if pair not in ALLOWED_PAIRS or m15_df is None or h1_input is None:
 
         return []
 
-    if len(m15_df) < 5 or len(h1_df) < 60:
+    m15_arr = as_ohlcv(m15_df)
+    m15_open, m15_high, m15_low, m15_close = (
+        m15_arr.open,
+        m15_arr.high,
+        m15_arr.low,
+        m15_arr.close,
+    )
+    m15_ts = m15_arr.datetime_ns
+    if len(m15_close) < 5 or len(h1_input) < 60:
 
         return []
 
+    as_of = ts_ns_to_pd(int(m15_ts[-1]))
 
-
-    m15_open, m15_high, m15_low, m15_close, _ = ohlcv_to_arrays(m15_df)
-
-    as_of = pd.Timestamp(m15_df["datetime"].iloc[-1])
-
-    h1_clipped = clip_as_of(h1_df, as_of)
+    h1_clipped = clip_as_of(h1_input, as_of)
 
     state = build_structure_state(h1_clipped, pair=pair, h4_df=h4_df, as_of=as_of)
 
@@ -209,27 +210,21 @@ def detect_dbbs_setups(
 
         return []
 
-
-
-    h1_open, h1_high, h1_low, h1_close, _ = ohlcv_to_arrays(h1_clipped)
-
-    h1_ts = np.asarray(h1_clipped["datetime"])
-
+    h1_arr = as_ohlcv(h1_clipped)
+    h1_open, h1_high, h1_low, h1_close = h1_arr.open, h1_arr.high, h1_arr.low, h1_arr.close
+    h1_ts = h1_arr.datetime_ns
     h1_days = day_index_from_timestamps(h1_ts)
-
-    m15_ts = np.asarray(m15_df["datetime"])
-
-
 
     setups: list[DbbsSetup] = []
 
     min_h1 = 55
 
-    n_h1 = len(state.bb20_upper)
-
+    n_h1 = min(len(state.bb20_upper), len(h1_ts), len(h1_close))
+    n_m15 = min(len(m15_close), len(m15_ts))
     m15_to_h1 = build_m15_to_h1_index(m15_df, h1_clipped)
+    n_m15 = min(n_m15, len(m15_to_h1))
 
-    for m_idx in range(1, len(m15_close)):
+    for m_idx in range(1, n_m15):
 
         h_idx = int(m15_to_h1[m_idx])
 
@@ -347,7 +342,7 @@ def detect_dbbs_setups(
 
             DbbsSetup(
 
-                timestamp=pd.Timestamp(m15_ts[m_idx]),
+                timestamp=ts_ns_to_pd(int(m15_ts[m_idx])),
 
                 pair=pair,
 
