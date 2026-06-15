@@ -164,10 +164,12 @@ LGR_SETUP_TYPES = frozenset({LGR_SETUP_TYPE})
 TTM_SETUP_TYPES = frozenset({TTM_SETUP_TYPE})
 from strategies.market_utils import (
     CORRELATED_PAIR,
+    LIVE_CANONICAL_PAIRS,
     SMTFeatures,
     calc_smt_features,
     calc_smt_intensity,
     correlated_pair,
+    normalize_pair_name,
     pip_size_for_pair,
     pair_dataframe_slot,
     positional_index as _positional_index,
@@ -3593,24 +3595,64 @@ LIVE_BAR_BUFFER_MAX = 600
 BROKER_POSITION_SETUP_TYPE = "BROKER_POSITION"
 BROKER_POSITION_HORIZON = pd.Timedelta(days=365)
 LIVE_EXEC_BAR_MINUTES = 5  # PropEA_Bridge.mq5 uses PERIOD_M5
+_LIVE_BAR_COLUMNS = ("datetime", "open", "high", "low", "close", "volume")
 
 
-def normalize_pair_name(raw: str) -> str | None:
-    """
-    ブローカー固有サフィックスを除去し canonical ペア名へ正規化する。
+def _empty_live_bars() -> pd.DataFrame:
+    return pd.DataFrame(columns=list(_LIVE_BAR_COLUMNS))
 
-    例: GBPUSDp / GBPUSD.pro / GBPUSD_m → GBPUSD
-    """
-    token = raw.upper().replace(".", "").replace("_", "").replace("-", "").replace(" ", "")
-    if "GBPUSD" in token:
-        return "GBPUSD"
-    if "EURUSD" in token:
-        return "EURUSD"
-    if "AUDUSD" in token:
-        return "AUDUSD"
-    if "NZDUSD" in token:
-        return "NZDUSD"
-    return None
+
+def upsert_live_pair_buffers(
+    state: LivePipelineState,
+    pair: str,
+    incoming: pd.DataFrame,
+) -> pd.DataFrame:
+    """Upsert M5 (or bridge) bars for a canonical pair into session buffers."""
+    current = state.pair_bars.get(pair, _empty_live_bars())
+    updated = upsert_live_bars(current, incoming) if not current.empty else incoming.copy()
+    state.pair_bars[pair] = updated
+    if pair == "GBPUSD":
+        state.gbp_df = updated
+    elif pair == "EURUSD":
+        state.eur_df = updated
+    return updated
+
+
+def _detect_setups_for_live_pair(
+    strategy: BaseStrategy,
+    state: LivePipelineState,
+    pair: str,
+) -> list[SetupUnion]:
+    """Detect setups for a single canonical pair using live bar buffers."""
+    from strategies.dbbs import DbbsStrategy
+    from strategies.dbbs_common import ALLOWED_PAIRS as DBBS_PAIRS
+    from strategies.vamr import VAMR_PAIRS, VamrStrategy
+
+    bars = state.pair_bars.get(pair, _empty_live_bars())
+    if bars.empty:
+        return []
+
+    if isinstance(strategy, DbbsStrategy):
+        if pair not in DBBS_PAIRS:
+            return []
+        m15 = resample_to_m15(bars)
+        h1 = resample_to_h1(bars)
+        h4 = resample_to_h4(h1) if not h1.empty else h1
+        return strategy.detect_setups(m15, pair, h1, h4) if not m15.empty else []
+
+    if isinstance(strategy, VamrStrategy):
+        if pair not in VAMR_PAIRS:
+            return []
+        h1 = resample_to_h1(bars)
+        return strategy.detect_setups(bars, pair, h1_df=h1, m5_df=bars)
+
+    if pair not in ("GBPUSD", "EURUSD"):
+        return []
+
+    gbp_df, eur_df, h1_gbp, h1_eur = _pair_dataframes(state)
+    if pair == "GBPUSD":
+        return strategy.detect_setups(gbp_df, pair, h1_gbp) if not gbp_df.empty else []
+    return strategy.detect_setups(eur_df, pair, h1_eur) if not eur_df.empty else []
 
 
 @dataclass
@@ -3621,6 +3663,7 @@ class LivePipelineState:
     bayes_engine: BayesEngine
     gbp_df: pd.DataFrame
     eur_df: pd.DataFrame
+    pair_bars: dict[str, pd.DataFrame]
     tref_bayes: Any = None
     sentinel: Any = None  # LiveSentinelState — lazy import avoided in dataclass field
 
@@ -3629,13 +3672,15 @@ class LivePipelineState:
         from audit.live_sentinel import LiveSentinelState
         from audit.tref_bayes_filter import TrefBayesFilter
 
-        empty = pd.DataFrame(columns=["datetime", "open", "high", "low", "close", "volume"])
+        empty = _empty_live_bars()
+        pair_bars = {pair: empty.copy() for pair in LIVE_CANONICAL_PAIRS}
         return cls(
             account=AccountState(profile=PROP_FIRM_PROFILE),
             bayes_engine=BayesEngine(),
             tref_bayes=TrefBayesFilter(),
-            gbp_df=empty.copy(),
-            eur_df=empty.copy(),
+            gbp_df=pair_bars["GBPUSD"].copy(),
+            eur_df=pair_bars["EURUSD"].copy(),
+            pair_bars=pair_bars,
             sentinel=LiveSentinelState.create(),
         )
 
@@ -3997,22 +4042,17 @@ def evaluate_trade_signal_with_pending(
     spread_points: int | None = int(spread_raw) if spread_raw is not None else None
 
     incoming_primary = bars_payload_to_dataframe(payload.get("bars") or [primary_bar])
-    if pair == "GBPUSD":
-        state.gbp_df = upsert_live_bars(state.gbp_df, incoming_primary)
-    else:
-        state.eur_df = upsert_live_bars(state.eur_df, incoming_primary)
+    upsert_live_pair_buffers(state, pair, incoming_primary)
 
     corr_market = payload.get("correlated_market")
     if corr_market:
-        corr_pair = normalize_pair_name(str(corr_market.get("pair", CORRELATED_PAIR[pair])))
+        corr_pair = normalize_pair_name(str(corr_market.get("pair", CORRELATED_PAIR.get(pair, pair))))
         if corr_pair is None:
-            corr_pair = CORRELATED_PAIR[pair]
+            corr_pair = CORRELATED_PAIR.get(pair, pair)
         corr_bar = market_payload_to_bar(corr_market, payload.get("correlated_bar_time"))
         incoming_corr = bars_payload_to_dataframe(payload.get("correlated_bars") or [corr_bar])
-        if corr_pair == "GBPUSD":
-            state.gbp_df = upsert_live_bars(state.gbp_df, incoming_corr)
-        elif corr_pair == "EURUSD":
-            state.eur_df = upsert_live_bars(state.eur_df, incoming_corr)
+        if corr_pair in LIVE_CANONICAL_PAIRS:
+            upsert_live_pair_buffers(state, corr_pair, incoming_corr)
 
     sync_live_account(
         state.account,
@@ -4040,8 +4080,8 @@ def evaluate_trade_signal_with_pending(
         if not verdict.entry_allowed:
             return sentinel_hold_signal(verdict.message, tags=verdict.tags), None
 
-    gbp_df, eur_df, h1_gbp, h1_eur = _pair_dataframes(state)
-    if gbp_df.empty and eur_df.empty:
+    pair_df = state.pair_bars.get(pair, _empty_live_bars())
+    if pair_df.empty:
         return (
             {
                 "action": "HOLD",
@@ -4068,31 +4108,15 @@ def evaluate_trade_signal_with_pending(
             None,
         )
 
-    london = live_strategies[0]
-    gbp_setups, eur_setups, track_gbp, track_eur, h1_gbp, h1_eur = _detect_setups_for_live_strategy(
-        london, gbp_df, eur_df, h1_gbp, h1_eur
-    )
-
-    active = _find_active_setup(
-        gbp_setups if pair == "GBPUSD" else eur_setups,
-        pair,
-        bar_timestamp,
-    )
-    matched_strategy = london
-    if active is None:
-        for strategy in live_strategies[1:]:
-            gbp_setups, eur_setups, track_gbp, track_eur, h1_gbp, h1_eur = _detect_setups_for_live_strategy(
-                strategy, gbp_df, eur_df, h1_gbp, h1_eur
-            )
-            active = _find_active_setup(
-                gbp_setups if pair == "GBPUSD" else eur_setups,
-                pair,
-                bar_timestamp,
-            )
-            if active is not None:
-                matched_strategy = strategy
-                break
-    if active is None:
+    matched_strategy: BaseStrategy | None = None
+    active: SetupUnion | None = None
+    for strategy in live_strategies:
+        setups = _detect_setups_for_live_pair(strategy, state, pair)
+        active = _find_active_setup(setups, pair, bar_timestamp)
+        if active is not None:
+            matched_strategy = strategy
+            break
+    if active is None or matched_strategy is None:
         return (
             {
                 "action": "HOLD",
@@ -4119,15 +4143,11 @@ def evaluate_trade_signal_with_pending(
             None,
         )
 
-    gbp_setups, eur_setups, track_gbp, track_eur, h1_gbp, h1_eur = _detect_setups_for_live_strategy(
-        matched_strategy, gbp_df, eur_df, h1_gbp, h1_eur
-    )
-    gbp_s = _find_active_setup(gbp_setups, "GBPUSD", bar_timestamp)
-    eur_s = _find_active_setup(eur_setups, "EURUSD", bar_timestamp)
-    if active.pair == "GBPUSD":
-        gbp_s = active
-    else:
-        eur_s = active
+    gbp_df, eur_df, h1_gbp, h1_eur = _pair_dataframes(state)
+    track_gbp = state.pair_bars.get("GBPUSD", _empty_live_bars())
+    track_eur = state.pair_bars.get("EURUSD", _empty_live_bars())
+    gbp_s = active if active.pair == "GBPUSD" else None
+    eur_s = active if active.pair == "EURUSD" else None
 
     minutes_to_news = int(calendar.get("minutes_to_next_news", DEFAULT_MINUTES_TO_NEWS))
     impact = str(calendar.get("news_impact_level", "LOW")).upper()

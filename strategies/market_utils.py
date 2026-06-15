@@ -17,6 +17,19 @@ LONDON_SESSION_HOURS = range(LONDON_SESSION_HOUR_START, LONDON_SESSION_HOUR_END 
 
 # BT / Live: 第1スロット（gbp_df）に載せるペア
 PRIMARY_SLOT_PAIRS = frozenset({"GBPUSD", "AUDUSD", "AUDJPY", "XAUUSD"})
+# Live bridge / VPS — canonical pairs (broker suffixes stripped before match)
+LIVE_CANONICAL_PAIRS: tuple[str, ...] = (
+    "EURGBP",
+    "GBPUSD",
+    "USDCAD",
+    "AUDNZD",
+    "EURUSD",
+    "AUDUSD",
+    "NZDUSD",
+    "XAUUSD",
+    "USDJPY",
+    "AUDJPY",
+)
 CORRELATED_PAIR = {
     "GBPUSD": "EURUSD",
     "EURUSD": "GBPUSD",
@@ -46,6 +59,21 @@ def pip_size_for_pair(pair: str) -> float:
     if upper.endswith("JPY") or upper in {"XAUUSD", "GOLD"}:
         return JPY_PIP_SIZE
     return PIP_SIZE
+
+
+def normalize_pair_name(raw: str) -> str | None:
+    """
+    Strip broker-specific suffixes and map to a canonical pair name.
+
+    Examples: AUDNZDp / AUDNZDP / AUDNZD.pro → AUDNZD
+    """
+    token = raw.upper().replace(".", "").replace("_", "").replace("-", "").replace(" ", "")
+    if not token:
+        return None
+    for pair in sorted(LIVE_CANONICAL_PAIRS, key=len, reverse=True):
+        if token.startswith(pair):
+            return pair
+    return None
 
 
 def uses_primary_dataframe(pair: str) -> bool:
