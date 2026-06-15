@@ -154,6 +154,7 @@ string StrategyLetterFromSetupType(const string setup_type)
    if(setup_type == "DBBS") return "B";
    if(setup_type == "DINAPOLI_STRUCTURE") return "C";
    if(setup_type == "VAMR") return "D";
+   if(setup_type == "SMRS") return "E";
    return "";
 }
 
@@ -164,6 +165,7 @@ string SetupTypeFromStrategyLetter(const string letter)
    if(letter == "B") return "DBBS";
    if(letter == "C") return "DINAPOLI_STRUCTURE";
    if(letter == "D") return "VAMR";
+   if(letter == "E") return "SMRS";
    return "";
 }
 

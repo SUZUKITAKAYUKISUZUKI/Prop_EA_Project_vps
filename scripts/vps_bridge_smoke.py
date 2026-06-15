@@ -17,15 +17,30 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+MANIFEST_PATH = ROOT / "deploy" / "vps-min-manifest.json"
+
 
 def _fail(msg: str) -> None:
     print(f"[FAIL] {msg}")
     sys.exit(1)
 
 
+def _manifest_version() -> str:
+    if not MANIFEST_PATH.is_file():
+        return "unknown"
+    try:
+        import json as _json
+
+        data = _json.loads(MANIFEST_PATH.read_text(encoding="utf-8"))
+        return str(data.get("version", "?"))
+    except Exception:
+        return "unknown"
+
+
 def main() -> None:
     print("=== Prop EA VPS bridge smoke test ===")
     print(f"Root: {ROOT}")
+    print(f"Manifest: deploy/vps-min-manifest.json v{_manifest_version()}")
 
     required = [
         ROOT / "strategies" / "bt_ohlcv.py",
@@ -36,19 +51,56 @@ def main() -> None:
         ROOT / "strategies" / "scan_numba_util.py",
         ROOT / "strategies" / "dinapoli.py",
         ROOT / "strategies" / "dinapoli_mtf.py",
+        ROOT / "strategies" / "dinapoli_universe_fast.py",
         ROOT / "src" / "filters" / "dn_prop_gate_runtime.py",
         ROOT / "backtest_results" / "models" / "dn_bayes_ev_v2.json",
         ROOT / "backtest_results" / "models" / "dn_prop_gate_v1.json",
         ROOT / "storage" / "dn_feature_store.py",
+        ROOT / "strategies" / "vamr.py",
+        ROOT / "strategies" / "vamr_bayes.py",
+        ROOT / "strategies" / "vamr_features.py",
+        ROOT / "strategies" / "vamr_phase2.py",
+        ROOT / "strategies" / "var_reversal.py",
+        ROOT / "strategies" / "var_detector.py",
+        ROOT / "backtest_results" / "models" / "vamr_bayes_v1.json",
+        ROOT / "strategies" / "smrs_pure.py",
+        ROOT / "strategies" / "smrs_scan_numba.py",
+        ROOT / "strategies" / "smrs_bayes.py",
+        ROOT / "strategies" / "smrs_production.py",
+        ROOT / "backtest_results" / "models" / "smrs_bayes_v1.json",
+        ROOT / "mt5" / "PropEA_Bridge.mq5",
+        ROOT / "deploy" / "portfolio_allocation_weights.json",
+    ]
+    excluded_bt_only = [
+        ROOT / "strategies" / "smrs_portfolio.py",
+        ROOT / "strategies" / "smrs_sizing.py",
     ]
     missing = [p for p in required if not p.is_file()]
     if missing:
         _fail(
-            "Missing VPS minimum files:\n  "
+            "Missing VPS minimum files (manifest v8 / A+B+C+D+E):\n  "
             + "\n  ".join(str(p.relative_to(ROOT)) for p in missing)
             + "\nRe-sync from dev (sync_vps_min.cmd) or git pull the latest VPS repo."
         )
-    print("[OK] VPS minimum files present (A+B+C: LSFC + DBBS + DiNapoli)")
+    present_bt_only = [p for p in excluded_bt_only if p.is_file()]
+    if present_bt_only:
+        print(
+            "[WARN] BT-only SMRS modules present (not required on VPS): "
+            + ", ".join(p.name for p in present_bt_only)
+        )
+    print("[OK] VPS minimum files present (A+B+C+D+E)")
+
+    try:
+        from strategies import STRATEGY_LETTER_BY_MODE, STRATEGY_LETTER_BY_SETUP_TYPE, expand_strategy_modes
+
+        assert expand_strategy_modes("abcde") == ("lsfc", "dbbs", "dinapoli", "vamr", "smrs")
+        assert STRATEGY_LETTER_BY_MODE["smrs"] == "E"
+        assert STRATEGY_LETTER_BY_SETUP_TYPE["SMRS"] == "E"
+    except Exception as exc:
+        print("[FAIL] strategy registry check:")
+        traceback.print_exc()
+        _fail(str(exc))
+    print("[OK] Strategy registry (letter E / abcde expansion)")
 
     try:
         import pandas as pd

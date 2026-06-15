@@ -1,0 +1,221 @@
+{
+  "version": 1,
+  "alpha": 1.0,
+  "priors": {
+    "win": 0.8343989769820972,
+    "loss": 0.1656010230179028
+  },
+  "class_counts": {
+    "win": 1305,
+    "loss": 259
+  },
+  "numeric_edges": {
+    "price_vs_poc": [
+      -0.6963388370423736,
+      -0.49954323995130717,
+      0.44312644278495755,
+      0.5830625383785114,
+      0.695970695970782
+    ],
+    "value_area_width_atr_ratio": [
+      0.0,
+      0.7549848212611492,
+      1.1625020078088424,
+      1.7363509487830693,
+      9.546472564389703
+    ],
+    "rejection_strength": [
+      0.6744186046511268,
+      0.7546740994854513,
+      0.8293628285119514,
+      0.9155353809605071,
+      1.0
+    ],
+    "volume_ratio_20ma": [
+      0.015206847178493,
+      0.5301065252379339,
+      0.862944537921486,
+      1.2339283647652297,
+      3.860335249092932
+    ],
+    "atr_percentile_100b": [
+      1.0,
+      33.0,
+      59.5,
+      84.0,
+      100.0
+    ]
+  },
+  "likelihoods": {
+    "win": {
+      "price_vs_poc": {
+        "PRICE_VS_POC_Q4": 324,
+        "PRICE_VS_POC_Q2": 353,
+        "PRICE_VS_POC_Q1": 285,
+        "PRICE_VS_POC_Q3": 343
+      },
+      "value_area_width_atr_ratio": {
+        "VALUE_AREA_WIDTH_ATR_RATIO_Q3": 307,
+        "VALUE_AREA_WIDTH_ATR_RATIO_Q1": 364,
+        "VALUE_AREA_WIDTH_ATR_RATIO_Q4": 295,
+        "VALUE_AREA_WIDTH_ATR_RATIO_Q2": 339
+      },
+      "rejection_strength": {
+        "REJECTION_STRENGTH_Q1": 329,
+        "REJECTION_STRENGTH_Q3": 330,
+        "REJECTION_STRENGTH_Q2": 327,
+        "REJECTION_STRENGTH_Q4": 319
+      },
+      "volume_ratio_20ma": {
+        "VOLUME_RATIO_20MA_Q1": 287,
+        "VOLUME_RATIO_20MA_Q2": 306,
+        "VOLUME_RATIO_20MA_Q3": 342,
+        "VOLUME_RATIO_20MA_Q4": 370
+      },
+      "atr_percentile_100b": {
+        "ATR_PERCENTILE_100B_Q1": 334,
+        "ATR_PERCENTILE_100B_Q3": 301,
+        "ATR_PERCENTILE_100B_Q4": 335,
+        "ATR_PERCENTILE_100B_Q2": 335
+      },
+      "session_type": {
+        "ASIA": 438,
+        "LONDON": 369,
+        "NY": 498
+      },
+      "vp_touch_side": {
+        "VAH": 894,
+        "VAL": 411
+      },
+      "htf_aligned": {
+        "aligned": 504,
+        "not_aligned": 801
+      },
+      "retest_count_bin": {
+        "4+": 760,
+        "1": 201,
+        "2": 184,
+        "3": 160
+      },
+      "primary_pa_type": {
+        "ENGULFING": 514,
+        "CLOSE_ONLY": 636,
+        "INSIDE_BAR": 155
+      }
+    },
+    "loss": {
+      "price_vs_poc": {
+        "PRICE_VS_POC_Q1": 106,
+        "PRICE_VS_POC_Q3": 48,
+        "PRICE_VS_POC_Q2": 38,
+        "PRICE_VS_POC_Q4": 67
+      },
+      "value_area_width_atr_ratio": {
+        "VALUE_AREA_WIDTH_ATR_RATIO_Q4": 96,
+        "VALUE_AREA_WIDTH_ATR_RATIO_Q3": 84,
+        "VALUE_AREA_WIDTH_ATR_RATIO_Q1": 27,
+        "VALUE_AREA_WIDTH_ATR_RATIO_Q2": 52
+      },
+      "rejection_strength": {
+        "REJECTION_STRENGTH_Q2": 64,
+        "REJECTION_STRENGTH_Q4": 72,
+        "REJECTION_STRENGTH_Q3": 61,
+        "REJECTION_STRENGTH_Q1": 62
+      },
+      "volume_ratio_20ma": {
+        "VOLUME_RATIO_20MA_Q2": 85,
+        "VOLUME_RATIO_20MA_Q1": 104,
+        "VOLUME_RATIO_20MA_Q4": 21,
+        "VOLUME_RATIO_20MA_Q3": 49
+      },
+      "atr_percentile_100b": {
+        "ATR_PERCENTILE_100B_Q4": 67,
+        "ATR_PERCENTILE_100B_Q3": 79,
+        "ATR_PERCENTILE_100B_Q2": 68,
+        "ATR_PERCENTILE_100B_Q1": 45
+      },
+      "session_type": {
+        "NY": 107,
+        "ASIA": 138,
+        "LONDON": 14
+      },
+      "vp_touch_side": {
+        "VAL": 132,
+        "VAH": 127
+      },
+      "htf_aligned": {
+        "not_aligned": 170,
+        "aligned": 89
+      },
+      "retest_count_bin": {
+        "4+": 231,
+        "1": 6,
+        "2": 11,
+        "3": 11
+      },
+      "primary_pa_type": {
+        "CLOSE_ONLY": 176,
+        "ENGULFING": 46,
+        "INSIDE_BAR": 37
+      }
+    }
+  },
+  "vocab": {
+    "price_vs_poc": [
+      "PRICE_VS_POC_Q1",
+      "PRICE_VS_POC_Q2",
+      "PRICE_VS_POC_Q3",
+      "PRICE_VS_POC_Q4"
+    ],
+    "value_area_width_atr_ratio": [
+      "VALUE_AREA_WIDTH_ATR_RATIO_Q1",
+      "VALUE_AREA_WIDTH_ATR_RATIO_Q2",
+      "VALUE_AREA_WIDTH_ATR_RATIO_Q3",
+      "VALUE_AREA_WIDTH_ATR_RATIO_Q4"
+    ],
+    "rejection_strength": [
+      "REJECTION_STRENGTH_Q1",
+      "REJECTION_STRENGTH_Q2",
+      "REJECTION_STRENGTH_Q3",
+      "REJECTION_STRENGTH_Q4"
+    ],
+    "volume_ratio_20ma": [
+      "VOLUME_RATIO_20MA_Q1",
+      "VOLUME_RATIO_20MA_Q2",
+      "VOLUME_RATIO_20MA_Q3",
+      "VOLUME_RATIO_20MA_Q4"
+    ],
+    "atr_percentile_100b": [
+      "ATR_PERCENTILE_100B_Q1",
+      "ATR_PERCENTILE_100B_Q2",
+      "ATR_PERCENTILE_100B_Q3",
+      "ATR_PERCENTILE_100B_Q4"
+    ],
+    "session_type": [
+      "ASIA",
+      "LONDON",
+      "NY"
+    ],
+    "vp_touch_side": [
+      "VAH",
+      "VAL"
+    ],
+    "htf_aligned": [
+      "aligned",
+      "not_aligned"
+    ],
+    "retest_count_bin": [
+      "1",
+      "2",
+      "3",
+      "4+"
+    ],
+    "primary_pa_type": [
+      "CLOSE_ONLY",
+      "ENGULFING",
+      "INSIDE_BAR"
+    ]
+  },
+  "avg_win_r": 1.301312950191571,
+  "avg_loss_r": 0.573527027027027
+}

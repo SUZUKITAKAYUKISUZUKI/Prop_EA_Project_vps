@@ -39,8 +39,11 @@ DEFAULT_MODEL_JSON = (
 PRODUCTION_SIZING_MODEL = "B"
 
 SETUP_TYPE = "VAMR"
+# Formal name + abbreviation (single source of truth for Strategy D)
 STRATEGY_ABBREV = "VAMR"
 STRATEGY_FULL_NAME = "Volume Area Mean Reversion to POC"
+STRATEGY_DISPLAY_NAME = f"{STRATEGY_FULL_NAME} ({STRATEGY_ABBREV})"
+STRATEGY_PORTFOLIO_LABEL = f"D {STRATEGY_ABBREV}"
 VAMR_PAIRS = frozenset({"AUDNZD", "EURGBP", "USDCAD"})
 DATA_DIR = Path(__file__).resolve().parents[1] / "data"
 VAMR_PAIR_FILES: dict[str, tuple[str, str, str]] = {
@@ -353,7 +356,9 @@ class VamrStrategy(BaseStrategy):
 __all__ = [
     "SETUP_TYPE",
     "STRATEGY_ABBREV",
+    "STRATEGY_DISPLAY_NAME",
     "STRATEGY_FULL_NAME",
+    "STRATEGY_PORTFOLIO_LABEL",
     "VAMR_PAIR_FILES",
     "VAMR_PAIRS",
     "VamrStrategy",

@@ -20,11 +20,12 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
+from strategies.vamr import STRATEGY_FULL_NAME
 from strategies.vamr_features import add_derived_features, load_poc_cohort, pf_str, profit_factor
 from strategies.var_reversal import ALLOWED_PAIRS
 from walkforward_runner import iter_wft_windows
 
-STRATEGY_NAME = "Volume Area Mean Reversion to POC (VAMR)"
+STRATEGY_NAME = STRATEGY_FULL_NAME
 DEFAULT_INPUT = PROJECT_ROOT / "backtest_results/logs/var_features_pure_10y.csv"
 DEFAULT_CACHE = PROJECT_ROOT / "backtest_results/logs/var_features_pure_10y_enriched.csv"
 DEFAULT_OUTPUT = PROJECT_ROOT / "reports/vamr_phase2_summary.md"

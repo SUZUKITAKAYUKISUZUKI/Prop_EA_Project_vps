@@ -1,0 +1,146 @@
+{
+  "version": 1,
+  "alpha": 1.0,
+  "priors": {
+    "win": 0.5972342264477096,
+    "loss": 0.40276577355229043
+  },
+  "class_counts": {
+    "win": 691,
+    "loss": 466
+  },
+  "atr_tertile_edges": [
+    2.0228242672891463,
+    3.554066333484778
+  ],
+  "likelihoods": {
+    "win": {
+      "pair": {
+        "AUDNZD": 147,
+        "NZDUSD": 461,
+        "EURGBP": 83
+      },
+      "direction": {
+        "SELL": 252,
+        "BUY": 439
+      },
+      "session": {
+        "NY": 534,
+        "LONDON": 157
+      },
+      "hour_bucket": {
+        "13_16": 223,
+        "17_20": 61,
+        "21_23": 250,
+        "07_09": 48,
+        "10_12": 109
+      },
+      "abs_z_score_bucket": {
+        "3.0_3.5": 71,
+        "2.5_3.0": 121,
+        "2.0_2.5": 240,
+        "3.5_4.0": 54,
+        "4.0_plus": 205
+      },
+      "atr_percentile_bucket": {
+        "LOW": 214,
+        "MID": 222,
+        "HIGH": 255
+      },
+      "pair_direction": {
+        "AUDNZD_SELL": 13,
+        "NZDUSD_BUY": 250,
+        "AUDNZD_BUY": 134,
+        "EURGBP_SELL": 28,
+        "NZDUSD_SELL": 211,
+        "EURGBP_BUY": 55
+      }
+    },
+    "loss": {
+      "pair": {
+        "NZDUSD": 379,
+        "EURGBP": 44,
+        "AUDNZD": 43
+      },
+      "direction": {
+        "BUY": 248,
+        "SELL": 218
+      },
+      "session": {
+        "LONDON": 133,
+        "NY": 333
+      },
+      "hour_bucket": {
+        "07_09": 41,
+        "13_16": 169,
+        "21_23": 72,
+        "17_20": 92,
+        "10_12": 92
+      },
+      "abs_z_score_bucket": {
+        "2.5_3.0": 83,
+        "2.0_2.5": 187,
+        "3.5_4.0": 34,
+        "3.0_3.5": 67,
+        "4.0_plus": 95
+      },
+      "atr_percentile_bucket": {
+        "LOW": 172,
+        "MID": 163,
+        "HIGH": 131
+      },
+      "pair_direction": {
+        "NZDUSD_BUY": 194,
+        "EURGBP_SELL": 20,
+        "NZDUSD_SELL": 185,
+        "EURGBP_BUY": 24,
+        "AUDNZD_SELL": 13,
+        "AUDNZD_BUY": 30
+      }
+    }
+  },
+  "vocab": {
+    "pair": [
+      "AUDNZD",
+      "EURGBP",
+      "NZDUSD"
+    ],
+    "direction": [
+      "BUY",
+      "SELL"
+    ],
+    "session": [
+      "LONDON",
+      "NY"
+    ],
+    "hour_bucket": [
+      "07_09",
+      "10_12",
+      "13_16",
+      "17_20",
+      "21_23"
+    ],
+    "abs_z_score_bucket": [
+      "2.0_2.5",
+      "2.5_3.0",
+      "3.0_3.5",
+      "3.5_4.0",
+      "4.0_plus"
+    ],
+    "atr_percentile_bucket": [
+      "HIGH",
+      "LOW",
+      "MID"
+    ],
+    "pair_direction": [
+      "AUDNZD_BUY",
+      "AUDNZD_SELL",
+      "EURGBP_BUY",
+      "EURGBP_SELL",
+      "NZDUSD_BUY",
+      "NZDUSD_SELL"
+    ]
+  },
+  "avg_win_r": 1.0,
+  "avg_loss_r": 1.0
+}

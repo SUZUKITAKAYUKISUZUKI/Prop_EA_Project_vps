@@ -15,6 +15,7 @@ from typing import Any, Mapping, Sequence
 import numpy as np
 import pandas as pd
 
+from strategies.vamr import STRATEGY_FULL_NAME
 from strategies.vamr_features import add_derived_features, load_poc_cohort, profit_factor
 from strategies.vamr_phase2 import (
     PATTERN_SPECS,
@@ -23,7 +24,7 @@ from strategies.vamr_phase2 import (
     max_drawdown_r,
 )
 
-STRATEGY_NAME = "Volume Area Mean Reversion to POC (VAMR)"
+STRATEGY_NAME = STRATEGY_FULL_NAME
 VAMR_BAYES_MODEL_VERSION = 1
 VAMR_BAYES_LAPLACE_ALPHA = 1.0
 VAMR_BAYES_MIN_TRAIN_ROWS = 30

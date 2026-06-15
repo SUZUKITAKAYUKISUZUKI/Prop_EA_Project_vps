@@ -33,9 +33,15 @@ from strategies.vamr import (
     STRATEGY_FULL_NAME as VAMR_FULL_NAME,
     VamrStrategy,
 )
+from strategies.smrs_pure import (
+    SETUP_TYPE as SMRS_SETUP_TYPE,
+    STRATEGY_ABBREV as SMRS_ABBREV,
+    STRATEGY_FULL_NAME as SMRS_FULL_NAME,
+)
+
 StrategyModeKey = Literal[
-    "lsfc", "als", "fvg", "tref", "vexp", "dtpa", "cspa", "wyckoff", "lgr", "ttm", "dbbs", "dbbsg", "dinapoli", "vamr", "adre", "adre_v2",
-    "continuation", "main", "all", "ab", "ac", "bc", "abc", "abcg", "abcd", "abcdn",
+    "lsfc", "als", "fvg", "tref", "vexp", "dtpa", "cspa", "wyckoff", "lgr", "ttm", "dbbs", "dbbsg", "dinapoli", "vamr", "smrs", "adre", "adre_v2",
+    "continuation", "main", "all", "ab", "ac", "bc", "abc", "abcg", "abcd", "abcdn", "abcde",
 ]
 
 # 実運用 (MT5 Bridge) で発注可能な mode — A～Z letter 割当のみ。
@@ -44,12 +50,14 @@ STRATEGY_LETTER_BY_MODE: dict[str, str] = {
     "dbbs": "B",
     "dinapoli": "C",
     "vamr": "D",
+    "smrs": "E",
 }
 STRATEGY_LETTER_BY_SETUP_TYPE: dict[str, str] = {
     "LONDON_SWEEP_FAILURE_CONTINUATION": "A",
     "DBBS": "B",
     "DINAPOLI_STRUCTURE": "C",
     "VAMR": "D",
+    "SMRS": "E",
 }
 SETUP_TYPE_BY_STRATEGY_LETTER: dict[str, str] = {
     letter: setup_type for setup_type, letter in STRATEGY_LETTER_BY_SETUP_TYPE.items()
@@ -57,7 +65,8 @@ SETUP_TYPE_BY_STRATEGY_LETTER: dict[str, str] = {
 # B — dbbs (DBBS): Dual Bollinger Band Squeeze + Bear Kill Switch V2（EURUSD/GBPUSD/XAUUSD 本番採用）
 # B — cspa (CSPA): アーカイブ — 検証の結果、プロップ用ポートフォリオには向いていない
 # C — dinapoli (DN): DiNapoli Structure + DN Prop Gate V1
-# D — vamr (VAMR): Volume Area Mean Reversion to POC（AUDNZD/EURGBP/USDCAD）
+# D — vamr (略称 VAMR): Volume Area Mean Reversion to POC — AUDNZD/EURGBP/USDCAD
+# E — smrs (略称 SMRS): Statistical Mean Reversion Scalper — AUDNZD/EURGBP/NZDUSD M1, Model A sizing
 # D — ttm: 仲値流動性イベント特徴量収集（執行 M1 / 構造 M5 / ATR M15）
 # H — wyckoff (WR): アーカイブ — 新戦略 Liquidity Grab Reversal (LGR) 構築に向けての発展的廃止
 # I — lgr (LGR): アーカイブ — プロップ向きでない（自己資金口座向けに優秀）
@@ -70,6 +79,7 @@ STRATEGY_ABBREV_BY_MODE: dict[str, str] = {
     "ttm": TTM_ABBREV,
     "dinapoli": DINAPOLI_ABBREV,
     "vamr": VAMR_ABBREV,
+    "smrs": SMRS_ABBREV,
 }
 
 STRATEGY_FULL_NAME_BY_MODE: dict[str, str] = {
@@ -78,10 +88,11 @@ STRATEGY_FULL_NAME_BY_MODE: dict[str, str] = {
     "ttm": TTM_FULL_NAME,
     "dinapoli": DINAPOLI_FULL_NAME,
     "vamr": VAMR_FULL_NAME,
+    "smrs": SMRS_FULL_NAME,
 }
 
 STRATEGY_PRIORITY_ORDER: tuple[str, ...] = (
-    "lsfc", "dbbs", "dinapoli", "vamr", "ttm",
+    "lsfc", "dbbs", "dinapoli", "vamr", "smrs", "ttm",
 )
 
 # (mode_key, strategy class) — archive 外の全実装。BT 用。
@@ -131,12 +142,14 @@ PORTFOLIO_AC_MODES: frozenset[str] = frozenset({"ac"})
 PORTFOLIO_AB_MODES: frozenset[str] = frozenset({"ab"})
 PORTFOLIO_BC_MODES: frozenset[str] = frozenset({"bc"})
 PORTFOLIO_ABC_MODES: frozenset[str] = frozenset({"abc", "abcd", "abcdn"})
+PORTFOLIO_ABCDE_MODES: frozenset[str] = frozenset({"abcde"})
 PORTFOLIO_ABCG_MODES: frozenset[str] = frozenset({"abcg"})
 MTF_PORTFOLIO_MODES: frozenset[str] = (
     PORTFOLIO_AC_MODES
     | PORTFOLIO_AB_MODES
     | PORTFOLIO_BC_MODES
     | PORTFOLIO_ABC_MODES
+    | PORTFOLIO_ABCDE_MODES
     | PORTFOLIO_ABCG_MODES
 )
 
@@ -155,7 +168,12 @@ def portfolio_includes_dinapoli(mode: str) -> bool:
 
 def portfolio_includes_vamr(mode: str) -> bool:
     """True when portfolio selector expands to a mode including VAMR (Strategy D)."""
-    return mode in PORTFOLIO_ABC_MODES
+    return mode in (PORTFOLIO_ABC_MODES | PORTFOLIO_ABCDE_MODES)
+
+
+def portfolio_includes_smrs(mode: str) -> bool:
+    """True when portfolio selector expands to a mode including SMRS (Strategy E)."""
+    return mode in PORTFOLIO_ABCDE_MODES
 
 
 def portfolio_includes_dbbsg(mode: str) -> bool:
@@ -185,6 +203,8 @@ def expand_strategy_modes(
             expanded.append("lsfc")
         elif item == "all":
             expanded.append("lsfc")
+        elif item in PORTFOLIO_ABCDE_MODES:
+            expanded.extend(["lsfc", "dbbs", "dinapoli", "vamr", "smrs"])
         elif item in PORTFOLIO_ABC_MODES:
             expanded.extend(["lsfc", "dbbs", "dinapoli", "vamr"])
         elif item in PORTFOLIO_ABCG_MODES:
@@ -275,6 +295,7 @@ __all__ = [
     "is_mtf_portfolio_mode",
     "MTF_PORTFOLIO_MODES",
     "PORTFOLIO_ABC_MODES",
+    "PORTFOLIO_ABCDE_MODES",
     "PORTFOLIO_ABCG_MODES",
     "PORTFOLIO_AB_MODES",
     "PORTFOLIO_AC_MODES",
@@ -282,11 +303,14 @@ __all__ = [
     "portfolio_includes_dbbs",
     "portfolio_includes_dbbsg",
     "portfolio_includes_dinapoli",
+    "portfolio_includes_smrs",
     "portfolio_includes_vamr",
     "portfolio_needs_h4",
     "VamrStrategy",
     "VAMR_ABBREV",
     "VAMR_FULL_NAME",
+    "SMRS_ABBREV",
+    "SMRS_FULL_NAME",
     "resolve_strategy_mode",
     "strategy_priority_index",
 ]

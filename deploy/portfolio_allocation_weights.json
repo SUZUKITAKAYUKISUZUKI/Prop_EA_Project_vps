@@ -1,0 +1,20 @@
+{
+  "mode": "ABCDE",
+  "verdict": "OPTIONAL_REFERENCE",
+  "status": "optional_reference_only",
+  "note": "Production default is PORTFOLIO_ALLOCATION_ENABLED=0 (full lot per strategy). Re-run portfolio_allocation_optimizer.py on main_abcde_3y.csv before enabling weights.",
+  "strategies": [
+    "LONDON_SWEEP_FAILURE_CONTINUATION",
+    "DBBS",
+    "DINAPOLI_STRUCTURE",
+    "VAMR",
+    "SMRS"
+  ],
+  "weights": {
+    "LONDON_SWEEP_FAILURE_CONTINUATION": 0.38,
+    "DBBS": 0.22,
+    "DINAPOLI_STRUCTURE": 0.25,
+    "VAMR": 0.05,
+    "SMRS": 0.10
+  }
+}
