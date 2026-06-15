@@ -9,6 +9,7 @@ from __future__ import annotations
 import os
 
 from strategies.archive.fvg_fill import FVG_L2_MIN_SCORE
+from strategies.smrs_production import PRODUCTION_L2_MIN_SCORE, SMRS_L2_MIN_SCORE_ENV
 
 FVG_SETUP_TYPE = "FVG_FILL"
 LSFC_SETUP_TYPE = "LONDON_SWEEP_FAILURE_CONTINUATION"
@@ -19,6 +20,7 @@ DTPA_SETUP_TYPE = "DTPA"
 CSPA_SETUP_TYPE = "CSPA"
 DBBS_SETUP_TYPE = "DBBS"
 VAMR_SETUP_TYPE = "VAMR"
+SMRS_SETUP_TYPE = "SMRS"
 WYCKOFF_SETUP_TYPE = "WYCKOFF_REVERSAL"
 WYCKOFF_SETUP_TYPE_LEGACY = "WYCKOFF_SPRING"
 WYCKOFF_SETUP_TYPES = frozenset({WYCKOFF_SETUP_TYPE, WYCKOFF_SETUP_TYPE_LEGACY})
@@ -28,6 +30,7 @@ DTPA_L2_MIN_SCORE = int(os.getenv("DTPA_L2_MIN_SCORE", "70"))
 CSPA_L2_MIN_SCORE = int(os.getenv("CSPA_L2_MIN_SCORE", "65"))
 DBBS_L2_MIN_SCORE = int(os.getenv("DBBS_L2_MIN_SCORE", "0"))
 VAMR_L2_MIN_SCORE = int(os.getenv("VAMR_L2_MIN_SCORE", "0"))
+SMRS_L2_MIN_SCORE = int(os.getenv(SMRS_L2_MIN_SCORE_ENV, str(PRODUCTION_L2_MIN_SCORE)))
 DTPA_LLM_REJECT_BELOW = int(os.getenv("DTPA_LLM_REJECT_BELOW", "65"))
 DTPA_LLM_ALLOW_MIN = int(os.getenv("DTPA_LLM_ALLOW_MIN", "85"))
 DTPA_LLM_CAUTION_MULT = float(os.getenv("DTPA_LLM_CAUTION_MULT", "0.5"))
@@ -52,6 +55,7 @@ def resolve_l2_min_candidate_score(setup_type: str, profile_default: int = 30) -
     | CSPA | G | 65（専用 L2 スコア） |
     | DBBS | B | 0（candidate_score 未使用） |
     | VAMR | D | 0（candidate_score 未使用） |
+    | SMRS | E | 0（candidate_score 未使用） |
     | WR | H | 50（プロトタイプ） |
 
 CSPA L3.5 ベイズ: ``audit.cspa_bayes_gate.evaluate_cspa_bayes_gate`` — CSPABayesEngine 3-Tier
@@ -66,6 +70,8 @@ CSPA L3.5 ベイズ: ``audit.cspa_bayes_gate.evaluate_cspa_bayes_gate`` — CSPA
         return DBBS_L2_MIN_SCORE
     if setup_type == VAMR_SETUP_TYPE:
         return VAMR_L2_MIN_SCORE
+    if setup_type == SMRS_SETUP_TYPE:
+        return SMRS_L2_MIN_SCORE
     if setup_type in WYCKOFF_SETUP_TYPES:
         return WYCKOFF_L2_MIN_SCORE
     if setup_type == FVG_SETUP_TYPE:

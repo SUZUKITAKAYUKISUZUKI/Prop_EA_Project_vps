@@ -121,7 +121,7 @@ notepad .env
 | B DBBS | `DBBS_DEFENSE=1` / `DBBS_BEAR_KILL_SWITCH=1` |
 | C DiNapoli | `DINAPOLI_DEFENSE=1` / `DN_PROP_GATE=1` |
 | D Volume Area Mean Reversion to POC (VAMR) | `VAMR_DEFENSE=1` / `VAMR_GEMINI_AUDIT=0` |
-| E Statistical Mean Reversion Scalper (SMRS) | `SMRS_GEMINI_AUDIT=0` / `SMRS_LLM_AUDIT=0` |
+| E Statistical Mean Reversion Scalper (SMRS) | `SMRS_DEFENSE=1` / `SMRS_GEMINI_AUDIT=0` / `SMRS_LLM_AUDIT=0` / `SMRS_L2_MIN_SCORE=0` / `PYRAMID_SMRS=0` |
 
 > **`MUTUAL_EXCLUSION_MODE=daily` があれば削除**（廃止済み）。
 
@@ -175,12 +175,11 @@ py -3 scripts\vps_bridge_smoke.py
 | B | `dbbs.py`, `dbbs_common.py`, `dbbs_bear_kill_switch.py`, `scan_numba_util.py` |
 | C | `dinapoli.py`, `dinapoli_mtf.py`, `dinapoli_universe_fast.py`, `src/filters/dn_prop_gate_*` |
 | D | `vamr.py`, `vamr_bayes.py`, `vamr_features.py`, `vamr_phase2.py`, `var_reversal.py`, `var_detector.py` |
-| E | `smrs_pure.py`, `smrs_scan_numba.py`, `smrs_bayes.py`, `smrs_production.py` |
+| E | `smrs.py`, `smrs_pure.py`, `smrs_scan_numba.py`, `smrs_bayes.py`, `smrs_sizing.py`, `smrs_production.py` |
 
 ### 意図的に除外（BT のみ — VPS 不要）
 
 - `strategies/smrs_portfolio.py`
-- `strategies/smrs_sizing.py`
 - `strategies/bt_l5*.py`, `bt_scan_parallel.py`
 
 ---

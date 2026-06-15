@@ -33,6 +33,7 @@ from strategies.vamr import (
     STRATEGY_FULL_NAME as VAMR_FULL_NAME,
     VamrStrategy,
 )
+from strategies.smrs import SmrsStrategy
 from strategies.smrs_pure import (
     SETUP_TYPE as SMRS_SETUP_TYPE,
     STRATEGY_ABBREV as SMRS_ABBREV,
@@ -103,6 +104,7 @@ STRATEGY_CLASS_REGISTRY: tuple[tuple[str, type[BaseStrategy]], ...] = (
     ("ttm", TtmStrategy),
     ("dinapoli", DiNapoliStrategy),
     ("vamr", VamrStrategy),
+    ("smrs", SmrsStrategy),
 )
 
 MODE_BY_STRATEGY_CLASS: dict[type[BaseStrategy], str] = {
@@ -306,6 +308,7 @@ __all__ = [
     "portfolio_includes_smrs",
     "portfolio_includes_vamr",
     "portfolio_needs_h4",
+    "SmrsStrategy",
     "VamrStrategy",
     "VAMR_ABBREV",
     "VAMR_FULL_NAME",

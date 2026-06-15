@@ -8,7 +8,7 @@
 
 input string InpApiUrl              = "http://127.0.0.1:8000/trade_signal";
 input int    InpTimerSeconds        = 60;          // シグナル照会間隔（秒）
-input int    InpHistoryBars         = 300;         // Pythonへ送るM5履歴本数
+input int    InpHistoryBars         = 300;         // Pythonへ送る履歴本数（SMRS=M1 / 他=M5）
 input int    InpMinutesToNews       = 45;          // 次ニュースまでの分数（暫定）
 input string InpNewsImpact          = "HIGH";      // LOW / MEDIUM / HIGH
 input double InpMaxSpreadPoints     = 30;          // 最大許容スプレッド
@@ -97,6 +97,15 @@ string FormatBarTime(const datetime t)
    MqlDateTime dt;
    TimeToStruct(t, dt);
    return StringFormat("%04d-%02d-%02d %02d:%02d:%02d", dt.year, dt.mon, dt.day, dt.hour, dt.min, dt.sec);
+}
+
+//+------------------------------------------------------------------+
+ENUM_TIMEFRAMES BarTimeframeForSymbol(const string symbol)
+{
+   string canonical = CanonicalPair(symbol);
+   if(canonical == "AUDNZD" || canonical == "EURGBP" || canonical == "NZDUSD")
+      return PERIOD_M1;
+   return PERIOD_M5;
 }
 
 //+------------------------------------------------------------------+
@@ -657,7 +666,7 @@ void ExecuteSignal(const string symbol, const string response_json)
 void RequestPipelineSignal()
 {
    string symbol = _Symbol;
-   ENUM_TIMEFRAMES tf = PERIOD_M5;
+   ENUM_TIMEFRAMES tf = BarTimeframeForSymbol(symbol);
 
    MqlRates rates[];
    ArraySetAsSeries(rates, true);
@@ -730,7 +739,8 @@ void OnTick()
    // タイマー間隔より短い周期で新バー検知したい場合の補助
    MqlRates rates[];
    ArraySetAsSeries(rates, true);
-   if(CopyRates(_Symbol, PERIOD_M5, 0, 1, rates) == 1 && rates[0].time != g_last_bar_time)
+   ENUM_TIMEFRAMES tf = BarTimeframeForSymbol(_Symbol);
+   if(CopyRates(_Symbol, tf, 0, 1, rates) == 1 && rates[0].time != g_last_bar_time)
       RequestPipelineSignal();
 }
 

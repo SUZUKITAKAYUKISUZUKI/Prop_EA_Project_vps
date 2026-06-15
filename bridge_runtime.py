@@ -61,9 +61,13 @@ def startup_bridge_runtime() -> dict[str, Any]:
 
     from strategies.dinapoli import configure_dinapoli_defense_env
     from strategies.dbbs_common import configure_dbbs_defense_env
+    from strategies.smrs_production import configure_smrs_defense_env
+    from strategies.vamr import configure_vamr_defense_env
 
     configure_dinapoli_defense_env()
     configure_dbbs_defense_env()
+    configure_vamr_defense_env()
+    configure_smrs_defense_env()
 
     configure_live_runtime(enable_llm=gemini_ok)
     _llm_auditor_enabled = gemini_ok

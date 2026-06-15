@@ -64,8 +64,10 @@ def main() -> None:
         ROOT / "strategies" / "var_detector.py",
         ROOT / "backtest_results" / "models" / "vamr_bayes_v1.json",
         ROOT / "strategies" / "smrs_pure.py",
+        ROOT / "strategies" / "smrs.py",
         ROOT / "strategies" / "smrs_scan_numba.py",
         ROOT / "strategies" / "smrs_bayes.py",
+        ROOT / "strategies" / "smrs_sizing.py",
         ROOT / "strategies" / "smrs_production.py",
         ROOT / "backtest_results" / "models" / "smrs_bayes_v1.json",
         ROOT / "mt5" / "PropEA_Bridge.mq5",
@@ -73,7 +75,6 @@ def main() -> None:
     ]
     excluded_bt_only = [
         ROOT / "strategies" / "smrs_portfolio.py",
-        ROOT / "strategies" / "smrs_sizing.py",
     ]
     missing = [p for p in required if not p.is_file()]
     if missing:
@@ -95,7 +96,20 @@ def main() -> None:
 
         assert expand_strategy_modes("abcde") == ("lsfc", "dbbs", "dinapoli", "vamr", "smrs")
         assert STRATEGY_LETTER_BY_MODE["smrs"] == "E"
-        assert STRATEGY_LETTER_BY_SETUP_TYPE["SMRS"] == "E"
+        from strategies import get_live_strategies
+
+        live_types = {s.setup_type for s in get_live_strategies({}, mode_h1=True)}
+        assert "SMRS" in live_types
+        from strategies.smrs_production import PRODUCTION_SPEC, configure_smrs_defense_env
+
+        configure_smrs_defense_env()
+        assert PRODUCTION_SPEC.letter == "E"
+        assert PRODUCTION_SPEC.bayes_enabled is True
+        assert PRODUCTION_SPEC.gemini_audit is False
+        assert PRODUCTION_SPEC.pyramiding is False
+        from strategies.smrs import SmrsStrategy
+
+        assert SmrsStrategy({}, mode_h1=False).setup_type == "SMRS"
     except Exception as exc:
         print("[FAIL] strategy registry check:")
         traceback.print_exc()

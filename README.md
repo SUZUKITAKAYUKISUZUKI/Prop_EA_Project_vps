@@ -14,7 +14,7 @@
 | **E** | `smrs` | **Statistical Mean Reversion Scalper**（略称 **SMRS**） | M1 | **AUDNZD, EURGBP, NZDUSD** |
 
 - Python Bridge は `STRATEGY_LETTER_BY_MODE` に登録された **A/B/C/D/E** を同一エクイティで順次評価します。
-- **E（Statistical Mean Reversion Scalper / 略称 SMRS）** — Phase 3 Bayes + Model A sizing。レジストリ・モデル JSON は同梱。**Live 執行**は `BaseStrategy` 実装追加まで BT merge 正本（`main_abcde_3y.csv`）。
+- **E（Statistical Mean Reversion Scalper / 略称 SMRS）** — M1 + Phase 3 Bayes + Model A sizing。Live 執行は `strategies/smrs.py`（Bridge letter **E**）。既定値は `strategies/smrs_production.py` の `PRODUCTION_SPEC`。
 - **AUDNZD / EURGBP** は D と E で共有 — **setup_type 単位の L2**（同一戦略×シンボル最大1）で競合を回避。
 - BT / WFT / 巨大 CSV / checkpoints は **含みません**（Bayes / DN Prop Gate 用モデル JSON のみ同梱）。
 
@@ -51,8 +51,11 @@ DINAPOLI_DEFENSE=1
 DN_PROP_GATE=1
 VAMR_DEFENSE=1
 VAMR_GEMINI_AUDIT=0
+SMRS_DEFENSE=1
 SMRS_GEMINI_AUDIT=0
 SMRS_LLM_AUDIT=0
+SMRS_L2_MIN_SCORE=0
+PYRAMID_SMRS=0
 ```
 
 **Profit Cushion ×0.65** は **A/B/C/D/E 全戦略共通** の L4.5 防御です。
@@ -103,9 +106,9 @@ SMRS_LLM_AUDIT=0
 
 **E — Statistical Mean Reversion Scalper（略称 SMRS）**
 
-- `strategies/smrs_pure.py` / `smrs_scan_numba.py` / `smrs_bayes.py` / `smrs_production.py`
+- `strategies/smrs.py` / `smrs_pure.py` / `smrs_scan_numba.py` / `smrs_bayes.py` / `smrs_sizing.py` / `smrs_production.py`
 - `backtest_results/models/smrs_bayes_v1.json`
-- **除外（BT のみ）:** `smrs_portfolio.py` / `smrs_sizing.py`
+- **除外（BT のみ）:** `smrs_portfolio.py`
 
 ## VPS 反映チェックリスト
 

@@ -122,6 +122,12 @@ from strategies.vamr import (
     is_vamr_generic_bayes_bypass,
     is_vamr_l4_bypass,
 )
+from strategies.smrs import (
+    SETUP_TYPE as SMRS_SETUP_TYPE,
+    is_smrs_defense_pure_mode,
+    is_smrs_generic_bayes_bypass,
+    is_smrs_l4_bypass,
+)
 from strategies.ttm import (
     TtmSetup,
     SETUP_TYPE as TTM_SETUP_TYPE,
@@ -182,7 +188,9 @@ from strategies.mtf_timestamp import (
 )
 from strategies import get_registered_strategies
 
-SetupUnion = LsfcSetup | ContinuationSetup | AlsSetup | FvgFillSetup | TrefSetup | VexpSetup | DtpaSetup | CspaSetup | SpringSetup | LgrSetup | DbbsSetup | DiNapoliSetup
+from strategies.smrs import SmrsSetup
+
+SetupUnion = LsfcSetup | ContinuationSetup | AlsSetup | FvgFillSetup | TrefSetup | VexpSetup | DtpaSetup | CspaSetup | SpringSetup | LgrSetup | DbbsSetup | DiNapoliSetup | SmrsSetup
 
 # =============================================================================
 # ■ ユーザー設定定数（ここを書き換えるだけでモード切替）
@@ -460,6 +468,8 @@ def is_defense_pure_setup(setup_type: str) -> bool:
         return is_dbbs_defense_pure_mode()
     if setup_type == VAMR_SETUP_TYPE:
         return is_vamr_defense_pure_mode()
+    if setup_type == SMRS_SETUP_TYPE:
+        return is_smrs_defense_pure_mode()
     return False
 
 
@@ -507,6 +517,8 @@ def is_bayes_bypass_setup_type(setup_type: str) -> bool:
         return is_dbbs_generic_bayes_bypass()
     if setup_type == VAMR_SETUP_TYPE:
         return is_vamr_generic_bayes_bypass()
+    if setup_type == SMRS_SETUP_TYPE:
+        return is_smrs_generic_bayes_bypass()
     return setup_type in BAYES_BYPASS_SETUP_TYPES
 
 
@@ -533,6 +545,8 @@ def is_l4_bypass_setup_type(setup_type: str) -> bool:
     if setup_type == DBBS_SETUP_TYPE and is_dbbs_l4_bypass():
         return True
     if setup_type == VAMR_SETUP_TYPE and is_vamr_l4_bypass():
+        return True
+    if setup_type == SMRS_SETUP_TYPE and is_smrs_l4_bypass():
         return True
     if setup_type == TREF_SETUP_TYPE:
         from strategies.archive.tokyo_range_expansion_failure import load_tref_config
@@ -965,6 +979,8 @@ def _rule_base_l4_bypass_result(
         tags.append("DBBS_L4_BYPASS")
     elif setup_type == VAMR_SETUP_TYPE:
         tags.append("VAMR_L4_BYPASS")
+    elif setup_type == SMRS_SETUP_TYPE:
+        tags.append("SMRS_L4_BYPASS")
     else:
         tags.append("RULE_BASE_L4_BYPASS")
     if htf_would_block:
@@ -978,7 +994,7 @@ def has_rule_base_l4_bypass_tag(tags: list[str] | tuple[str, ...]) -> bool:
     tag_set = set(tags)
     return bool(
         tag_set
-        & {"L4_BYPASS", "LSFC_L4_BYPASS", "ALS_L4_BYPASS", "TREF_L4_BYPASS", "CSPA_L4_BYPASS", "WYCKOFF_L4_BYPASS", "LGR_L4_BYPASS", "TTM_L4_BYPASS", "DBBS_L4_BYPASS", "VAMR_L4_BYPASS", "RULE_BASE_L4_BYPASS"}
+        & {"L4_BYPASS", "LSFC_L4_BYPASS", "ALS_L4_BYPASS", "TREF_L4_BYPASS", "CSPA_L4_BYPASS", "WYCKOFF_L4_BYPASS", "LGR_L4_BYPASS", "TTM_L4_BYPASS", "DBBS_L4_BYPASS", "VAMR_L4_BYPASS", "SMRS_L4_BYPASS", "RULE_BASE_L4_BYPASS"}
     )
 
 
@@ -2167,6 +2183,12 @@ def _evaluate_setup_at_timestamp(
         has_bos = False
         atr_ratio = float(raw.get("atr_vs_session_avg", 1.0) or 1.0)
         both_sweep = False
+    elif setup_type == SMRS_SETUP_TYPE:
+        smt = 0.0
+        smt_feats = SMTFeatures(intensity=0.0, diff=0.0, leader="NONE")
+        has_bos = False
+        atr_ratio = float(raw.get("atr_ratio", 1.0) or 1.0)
+        both_sweep = False
     else:
         smt = float(raw["smt_intensity"])
         smt_feats = SMTFeatures(
@@ -2252,6 +2274,9 @@ def _evaluate_setup_at_timestamp(
     elif setup_type == VAMR_SETUP_TYPE:
         bayes_probability = float(raw.get("bayes_probability", 0.0) or 0.0)
         bayes_hard_reject = False
+    elif setup_type == SMRS_SETUP_TYPE:
+        bayes_probability = float(raw.get("bayes_probability", 0.0) or 0.0)
+        bayes_hard_reject = False
     elif is_bayes_bypass_setup_type(setup_type):
         bayes_probability = BAYES_BYPASS_NEUTRAL_PROBABILITY
         bayes_hard_reject = False
@@ -2280,6 +2305,10 @@ def _evaluate_setup_at_timestamp(
     )
     vamr_signal_reject = (
         setup_type == VAMR_SETUP_TYPE
+        and strategy_result.strategy_action == "REJECT"
+    )
+    smrs_signal_reject = (
+        setup_type == SMRS_SETUP_TYPE
         and strategy_result.strategy_action == "REJECT"
     )
 
@@ -2330,6 +2359,12 @@ def _evaluate_setup_at_timestamp(
         llm_eligible = False
     elif vamr_signal_reject:
         reason = str(raw.get("reject_reason") or "VAMR")
+        tags = [reason]
+        risk_score, latency, llm_decision, llm_confidence_score, llm_reason_summary = 0, 0, "REJECT", 0, ""
+        decision_source = f"REJECT_BY_{reason}"
+        llm_eligible = False
+    elif smrs_signal_reject:
+        reason = str(raw.get("reject_reason") or "SMRS")
         tags = [reason]
         risk_score, latency, llm_decision, llm_confidence_score, llm_reason_summary = 0, 0, "REJECT", 0, ""
         decision_source = f"REJECT_BY_{reason}"
@@ -2790,6 +2825,23 @@ def _evaluate_setup_at_timestamp(
         )
         if "VAMR_MODEL_B_SIZING" not in tags:
             tags.append("VAMR_MODEL_B_SIZING")
+
+    smrs_size_multiplier = 1.0
+    if (
+        setup_type == SMRS_SETUP_TYPE
+        and not is_reject
+        and lot_factor > 0.0
+    ):
+        smrs_size_multiplier = float(raw.get("smrs_size_multiplier", 1.0) or 1.0)
+        lot_factor = round(lot_factor * smrs_size_multiplier, 4)
+        lot_factor = audit_rm.apply_lot_factor_floor(lot_factor)
+        base_risk_pct = account.resolved_base_risk_pct()
+        risk_budget = round(equity_snapshot * base_risk_pct * lot_factor, 2)
+        lot_size = audit_rm.lot_from_risk_budget(
+            risk_budget, sl_distance, lot_factor
+        )
+        if "SMRS_MODEL_A_SIZING" not in tags:
+            tags.append("SMRS_MODEL_A_SIZING")
 
     dn_ev_rank_v2 = 0.0
     dn_prop_gate_tier = ""
@@ -3627,10 +3679,16 @@ def _detect_setups_for_live_pair(
     from strategies.dbbs import DbbsStrategy
     from strategies.dbbs_common import ALLOWED_PAIRS as DBBS_PAIRS
     from strategies.vamr import VAMR_PAIRS, VamrStrategy
+    from strategies.smrs import SMRS_PAIRS, SmrsStrategy
 
     bars = state.pair_bars.get(pair, _empty_live_bars())
     if bars.empty:
         return []
+
+    if isinstance(strategy, SmrsStrategy):
+        if pair not in SMRS_PAIRS:
+            return []
+        return strategy.detect_setups(bars, pair) if len(bars) >= 120 else []
 
     if isinstance(strategy, DbbsStrategy):
         if pair not in DBBS_PAIRS:
