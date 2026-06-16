@@ -1,4 +1,8 @@
-"""Prop Firm Objective Optimizer (PFOO) + Portfolio Equity Trail (PET)."""
+"""Core package — PET (live-safe). PFOO symbols are lazy-loaded on demand."""
+
+from __future__ import annotations
+
+from typing import Any
 
 from core.portfolio_equity_trail import (
     PetDecision,
@@ -11,7 +15,6 @@ from core.portfolio_equity_trail import (
     load_pet_config,
     run_pet_monte_carlo_validation,
 )
-from core.prop_optimizer import PropOptimizer, PFOOResult, run_pfoo
 
 __all__ = [
     "PropOptimizer",
@@ -27,3 +30,17 @@ __all__ = [
     "load_pet_config",
     "run_pet_monte_carlo_validation",
 ]
+
+_PFOO_EXPORTS = {
+    "PropOptimizer": "PropOptimizer",
+    "PFOOResult": "PFOOResult",
+    "run_pfoo": "run_pfoo",
+}
+
+
+def __getattr__(name: str) -> Any:
+    if name in _PFOO_EXPORTS:
+        from core import prop_optimizer as mod
+
+        return getattr(mod, _PFOO_EXPORTS[name])
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

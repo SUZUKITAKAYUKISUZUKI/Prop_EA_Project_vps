@@ -214,19 +214,100 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-try:
-    from dashboard.prop_optimizer_panel import register_dashboard as register_pfoo_dashboard
 
-    register_pfoo_dashboard(app)
-except ImportError:
-    logger.warning("PFOO dashboard not available (dashboard package missing)")
+def build_runtime_snapshot() -> dict[str, Any]:
+    """Lightweight JSON snapshot for local dashboard (no HTML on VPS)."""
+    from audit.risk_manager import (
+        DAILY_DD_TAPER_MAX_PCT,
+        challenge_profit_progress_pct,
+    )
+    from core.portfolio_equity_trail import is_pet_enabled, resolve_pet_mode
 
-try:
-    from dashboard.pet_panel import register_dashboard as register_pet_dashboard
+    acct = _pipeline_state.account
+    acct.update_equity_high_water_mark()
+    profit_pct = challenge_profit_progress_pct(acct.phase_start_equity, acct.equity)
+    daily_loss_frac = acct.daily_loss_fraction()
+    daily_dd_used = daily_loss_frac * DAILY_DD_TAPER_MAX_PCT
+    total_dd_used = acct.current_drawdown_pct()
 
-    register_pet_dashboard(app)
-except ImportError:
-    logger.warning("PET dashboard not available (dashboard package missing)")
+    pet_payload: dict[str, Any] = {
+        "enabled": is_pet_enabled(acct.profile),
+        "profile": acct.profile,
+        "mode": resolve_pet_mode(),
+        "runtime": None,
+        "decision": None,
+    }
+    runtime = _pipeline_state.pet
+    decision = _pipeline_state.last_pet_decision
+    if runtime is not None:
+        pet_payload["runtime"] = {
+            "day_start_equity": runtime.day_start_equity,
+            "peak_equity": runtime.peak_equity,
+            "protected_equity": runtime.protected_equity,
+            "peak_gain_r": runtime.peak_gain_r,
+            "locked_profit_r": runtime.locked_profit_r,
+            "stage_name": runtime.stage_name,
+            "active": runtime.active,
+            "breached": runtime.breached,
+            "disable_new_entries": runtime.disable_new_entries,
+            "trading_halted_for_day": runtime.trading_halted_for_day,
+            "last_action": runtime.last_action,
+            "server_day": runtime.server_day,
+        }
+    if decision is not None:
+        pet_payload["decision"] = decision.to_dict()
+
+    sentinel_state = _pipeline_state.sentinel.to_dict() if _pipeline_state.sentinel else {}
+
+    from datetime import datetime, timezone
+
+    return {
+        "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC"),
+        "account": {
+            "equity": round(acct.equity, 2),
+            "balance": round(acct.equity, 2),
+            "peak_equity": round(acct.equity_high_water_mark, 2),
+            "phase_start_equity": round(acct.phase_start_equity, 2),
+            "daily_start_equity": round(acct.daily_start_equity, 2),
+            "profile": acct.profile,
+        },
+        "challenge": {
+            "days_elapsed": 0,
+            "profit_progress_percent": round(profit_pct, 4),
+            "daily_dd_used_percent": round(daily_dd_used, 4),
+            "total_dd_used_percent": round(total_dd_used, 4),
+        },
+        "sentinel": {
+            "enabled": is_live_sentinel_enabled(),
+            "state": sentinel_state,
+        },
+        "pet": pet_payload,
+    }
+
+
+def _maybe_mount_bridge_dashboards() -> None:
+    from audit.bridge_ui_config import is_bridge_dashboard_enabled
+
+    if not is_bridge_dashboard_enabled():
+        logger.info("Bridge dashboards disabled (BRIDGE_MOUNT_DASHBOARD=0). Use local dashboard.")
+        return
+    try:
+        from dashboard.prop_optimizer_panel import register_dashboard as register_pfoo_dashboard
+
+        register_pfoo_dashboard(app)
+        logger.info("Mounted PFOO dashboard on bridge")
+    except ImportError:
+        logger.warning("PFOO dashboard not available (dashboard package missing)")
+    try:
+        from dashboard.pet_panel import register_dashboard as register_pet_dashboard
+
+        register_pet_dashboard(app)
+        logger.info("Mounted PET dashboard on bridge")
+    except ImportError:
+        logger.warning("PET dashboard not available (dashboard package missing)")
+
+
+_maybe_mount_bridge_dashboards()
 
 
 def _request_to_dict(request: TradeSignalRequest) -> dict[str, Any]:
@@ -267,13 +348,6 @@ async def trade_signal(request: TradeSignalRequest) -> TradeSignalResponse:
     except Exception as exc:
         logger.exception("POST /trade_signal failed: %s", exc)
         raise HTTPException(status_code=500, detail=str(exc)) from exc
-    try:
-        from dashboard.pet_panel import update_pet_from_decision
-
-        if _pipeline_state.last_pet_decision is not None:
-            update_pet_from_decision(_pipeline_state.last_pet_decision, _pipeline_state.pet)
-    except ImportError:
-        pass
     return TradeSignalResponse(**result)
 
 
@@ -334,37 +408,17 @@ async def sentinel_status() -> dict[str, Any]:
     }
 
 
+@app.get("/api/runtime/snapshot", response_model=dict[str, Any])
+async def runtime_snapshot() -> dict[str, Any]:
+    """Unified runtime JSON for local dashboard polling (VPS-safe, no heavy UI)."""
+    return build_runtime_snapshot()
+
+
 @app.get("/pet/status", response_model=dict[str, Any])
 async def pet_status() -> dict[str, Any]:
     """Portfolio Equity Trail runtime snapshot."""
-    from core.portfolio_equity_trail import is_pet_enabled
-
-    decision = _pipeline_state.last_pet_decision
-    runtime = _pipeline_state.pet
-    payload: dict[str, Any] = {
-        "enabled": is_pet_enabled(_pipeline_state.account.profile),
-        "profile": _pipeline_state.account.profile,
-        "runtime": None,
-        "decision": None,
-    }
-    if runtime is not None:
-        payload["runtime"] = {
-            "day_start_equity": runtime.day_start_equity,
-            "peak_equity": runtime.peak_equity,
-            "protected_equity": runtime.protected_equity,
-            "peak_gain_r": runtime.peak_gain_r,
-            "locked_profit_r": runtime.locked_profit_r,
-            "stage_name": runtime.stage_name,
-            "active": runtime.active,
-            "breached": runtime.breached,
-            "disable_new_entries": runtime.disable_new_entries,
-            "trading_halted_for_day": runtime.trading_halted_for_day,
-            "last_action": runtime.last_action,
-            "server_day": runtime.server_day,
-        }
-    if decision is not None:
-        payload["decision"] = decision.to_dict()
-    return payload
+    snap = build_runtime_snapshot()
+    return snap["pet"]
 
 
 @app.post("/reset_state")
