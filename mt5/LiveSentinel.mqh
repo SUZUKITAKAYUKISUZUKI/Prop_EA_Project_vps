@@ -273,4 +273,15 @@ bool LiveSentinel_ShouldHoldLogicClose(const string symbol, const long max_sprea
    return false;
 }
 
+//+------------------------------------------------------------------+
+double LiveSentinel_DailyDdRemainingPct()
+{
+   if(g_ls_day_start_balance <= 0.0)
+      return 5.0;
+   double balance = AccountInfoDouble(ACCOUNT_BALANCE);
+   double daily_loss = MathMax(0.0, g_ls_day_start_balance - balance);
+   double used_pct = daily_loss / g_ls_day_start_balance * 100.0;
+   return MathMax(0.0, 5.0 - used_pct);
+}
+
 #endif

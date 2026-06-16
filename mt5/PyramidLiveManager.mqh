@@ -577,7 +577,10 @@ bool PyramidLive_RegisterAfterEntry(
    ExtractJsonString(response_json, "trade_id", trade_id);
    ExtractJsonString(response_json, "setup_type", setup_type);
    if(trade_id == "")
+   {
+      Print("PyramidLive register skip — trade_id missing in Python signal JSON");
       return false;
+   }
 
    double atr = 0.0;
    if(!ExtractJsonDouble(response_json, "exit_atr", atr) || atr <= 0.0)
@@ -590,10 +593,13 @@ bool PyramidLive_RegisterAfterEntry(
    if(ExtractJsonString(response_json, "action", action) && action == "SELL")
       direction = "SELL";
 
+   double tick_size = SymbolInfoDouble(symbol, SYMBOL_TRADE_TICK_SIZE);
+   double tick_value = SymbolInfoDouble(symbol, SYMBOL_TRADE_TICK_VALUE);
+
    string body = StringFormat(
       "{\"trade_id\":\"%s\",\"setup_type\":\"%s\",\"symbol\":\"%s\",\"direction\":\"%s\","
       "\"entry\":%.5f,\"sl\":%.5f,\"tp\":%.5f,\"atr\":%.6f,\"lot_size\":%.4f,"
-      "\"base_ticket\":%I64u,\"entry_bar_index\":0}",
+      "\"base_ticket\":%I64u,\"entry_bar_index\":0,\"tick_size\":%.8f,\"tick_value\":%.8f}",
       JsonEscape(trade_id),
       JsonEscape(setup_type),
       JsonEscape(CanonicalPair(symbol)),
@@ -603,12 +609,17 @@ bool PyramidLive_RegisterAfterEntry(
       tp,
       atr,
       lot,
-      base_ticket
+      base_ticket,
+      tick_size,
+      tick_value
    );
 
    string response = "";
    if(!PyramidLive_PostJson(PyramidLive_ApiUrl("/pyramid/register"), body, response))
+   {
+      Print("PyramidLive register failed trade_id=", trade_id, " setup=", setup_type);
       return false;
+   }
 
    string group_id = "";
    ExtractJsonString(response, "pyramid_group_id", group_id);

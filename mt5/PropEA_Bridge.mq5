@@ -808,7 +808,7 @@ void OnTick()
 
    if(InpPyramidLiveEnabled)
    {
-      PyramidLive_OnNewBar(_Symbol, PERIOD_M5, InpMagic, 5.0);
+      PyramidLive_OnNewBar(_Symbol, PERIOD_M5, InpMagic, LiveSentinel_DailyDdRemainingPct());
       PyramidLive_PruneClosedTracks(_Symbol, InpMagic);
    }
 

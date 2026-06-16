@@ -1,0 +1,26 @@
+{
+  "Fintokei_100K": {
+    "target_profit": 8.0,
+    "daily_dd_limit": 4.5,
+    "total_dd_limit": 8.5,
+    "max_days": 0,
+    "starting_equity": 100000.0,
+    "profile_key": "challenge"
+  },
+  "FTMO_100K": {
+    "target_profit": 10.0,
+    "daily_dd_limit": 5.0,
+    "total_dd_limit": 10.0,
+    "max_days": 30,
+    "starting_equity": 100000.0,
+    "profile_key": "challenge"
+  },
+  "FundingPips_100K": {
+    "target_profit": 8.0,
+    "daily_dd_limit": 5.0,
+    "total_dd_limit": 10.0,
+    "max_days": 0,
+    "starting_equity": 100000.0,
+    "profile_key": "challenge"
+  }
+}

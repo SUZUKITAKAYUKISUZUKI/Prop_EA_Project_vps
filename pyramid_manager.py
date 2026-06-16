@@ -14,6 +14,8 @@ from typing import Any
 
 import pandas as pd
 
+from audit.broker_costs import apply_commission_sl_floor, min_net_profit_sl
+
 PIP_SIZE = 0.0001
 LSFC_SETUP_TYPE = "LONDON_SWEEP_FAILURE_CONTINUATION"
 ALS_SETUP_TYPE = "ASIAN_SESSION_LIQUIDITY_SWEEP"
@@ -208,6 +210,9 @@ class PyramidManager:
     initial_stop_loss: float
     max_pyramid_layers: int = 3
     daily_dd_remaining_percent: float = 5.0
+    symbol: str = ""
+    tick_size: float = 0.0
+    tick_value: float = 0.0
     positions: list[PyramidPosition] = field(default_factory=list)
     peak_unrealized_r: float = 0.0
     peak_favorable_price: float = 0.0
@@ -236,6 +241,23 @@ class PyramidManager:
         """追加段数（初回除く）。"""
         return max(0, self.layer_count - 1)
 
+    def total_lot_size(self) -> float:
+        return sum(p.lot_size for p in self.positions)
+
+    def min_net_profit_sl(self) -> float:
+        """Fintokei 手数料 + 微益バッファ込みの SL 下限/上限。"""
+        legs = [(p.entry_price, p.lot_size) for p in self.positions]
+        return min_net_profit_sl(
+            self.direction,
+            legs,
+            tick_size=self.tick_size,
+            tick_value=self.tick_value,
+            symbol=self.symbol,
+        )
+
+    def _commission_sl_floor(self) -> float:
+        return self.min_net_profit_sl()
+
     def average_entry_price(self) -> float:
         total_lot = sum(p.lot_size for p in self.positions)
         if total_lot <= 0:
@@ -251,21 +273,25 @@ class PyramidManager:
         return (avg - price) / self.base_risk
 
     def _all_sl_at_breakeven(self) -> bool:
+        floor = self._commission_sl_floor()
         if self.direction == "BUY":
-            return all(p.current_sl >= self.breakeven_price for p in self.positions)
-        return all(p.current_sl <= self.breakeven_price for p in self.positions)
+            return all(p.current_sl >= floor for p in self.positions)
+        return all(p.current_sl <= floor for p in self.positions)
 
     def move_all_sl_to_breakeven(self) -> None:
-        """条件B: 全 SL を初回エントリー（Breakeven）以上/以下へ。"""
+        """条件B: 全 SL を手数料込み建値以上/以下へ。"""
+        floor = self._commission_sl_floor()
         for pos in self.positions:
             if self.direction == "BUY":
-                pos.current_sl = max(pos.current_sl, self.breakeven_price)
+                pos.current_sl = max(pos.current_sl, floor)
             else:
-                pos.current_sl = min(pos.current_sl, self.breakeven_price)
+                pos.current_sl = min(pos.current_sl, floor)
         self._sl_at_breakeven = self._all_sl_at_breakeven()
 
     def _ratchet_sl(self, new_sl: float) -> None:
-        """SL は利益方向にのみ更新（ratchet）。"""
+        """SL は利益方向にのみ更新（ratchet）+ 手数料込み微益下限。"""
+        floor = self._commission_sl_floor()
+        new_sl = apply_commission_sl_floor(self.direction, new_sl, floor)
         for pos in self.positions:
             if self.direction == "BUY":
                 pos.current_sl = max(pos.current_sl, new_sl)
@@ -273,12 +299,15 @@ class PyramidManager:
                 pos.current_sl = min(pos.current_sl, new_sl)
 
     def update_trailing_from_peak(self) -> None:
-        """最高含み益更新時: 全 SL → max/min(現在SL, 最高値 ∓ 1.0×ATR)。"""
+        """最高含み益更新時: peak ∓ 1.0×ATR、ただし手数料込み微益 SL 下限を下回らない。"""
+        floor = self._commission_sl_floor()
         if self.direction == "BUY":
             trail = self.peak_favorable_price - 1.0 * self.atr
+            trail = max(trail, floor)
             self._ratchet_sl(trail)
         else:
             trail = self.peak_favorable_price + 1.0 * self.atr
+            trail = min(trail, floor)
             self._ratchet_sl(trail)
 
     def update_peak(self, high: float, low: float, close: float) -> None:

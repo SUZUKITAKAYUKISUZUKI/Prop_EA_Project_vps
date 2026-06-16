@@ -21,7 +21,11 @@ LIVE_PYRAMID_TRIGGER_R = _env_float("LIVE_PYRAMID_TRIGGER_R", 1.0)
 
 
 def live_pyramid_env_enabled() -> bool:
-    return _env_flag("LIVE_PYRAMID_ENABLED") is True
+    explicit = _env_flag("LIVE_PYRAMID_ENABLED")
+    if explicit is not None:
+        return explicit
+    # VPS 既定: PYRAMID_ENABLED=1 なら Live ブリッジも ON（明示 0 でのみ OFF）
+    return _env_flag("PYRAMID_ENABLED") is True
 
 
 # 後方互換: import 時スナップショット（startup ログ用）。判定は live_pyramid_env_enabled() を使用。

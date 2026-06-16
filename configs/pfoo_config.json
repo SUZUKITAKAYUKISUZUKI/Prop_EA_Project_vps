@@ -1,0 +1,50 @@
+{
+  "default_profile": "Fintokei_100K",
+  "default_mode": "BALANCED",
+  "default_inputs": ["backtest_results/main_abcde_3y.csv"],
+  "prae_artifact_dir": "backtest_results/prae_v1",
+  "progress_risk_bands": [
+    {"max_progress_pct": 2.0, "risk_multiplier": 0.65},
+    {"max_progress_pct": 5.0, "risk_multiplier": 1.0},
+    {"max_progress_pct": 8.0, "risk_multiplier": 1.2},
+    {"max_progress_pct": 999.0, "risk_multiplier": 0.75}
+  ],
+  "utility_weights": {
+    "pass_probability": 0.6,
+    "speed_score": 0.3,
+    "capital_preservation": 0.1
+  },
+  "objective_modes": {
+    "SAFE": {"pass_probability": 0.75, "speed_score": 0.10, "capital_preservation": 0.15},
+    "BALANCED": {"pass_probability": 0.60, "speed_score": 0.30, "capital_preservation": 0.10},
+    "AGGRESSIVE": {"pass_probability": 0.35, "speed_score": 0.55, "capital_preservation": 0.10}
+  },
+  "recovery_mode": {
+    "dd_used_trigger_pct_of_limit": 50.0,
+    "risk_multiplier": 0.50,
+    "min_bayes_probability": 0.55,
+    "disable_weakest_strategy_count": 1
+  },
+  "endgame_mode": {
+    "progress_trigger_pct_of_target": 80.0,
+    "risk_multiplier": 0.60,
+    "min_bayes_probability": 0.60,
+    "prefer_low_variance": true
+  },
+  "risk_budget": {
+    "min_weight": 0.0,
+    "max_weight": 0.50,
+    "random_trials": 300,
+    "search_mc_trials": 15,
+    "search_horizon_trades": 150,
+    "top_n": 10
+  },
+  "monte_carlo_trials": [500],
+  "strategy_labels": {
+    "LONDON_SWEEP_FAILURE_CONTINUATION": "LSFC",
+    "DBBS": "DBBS",
+    "DINAPOLI_STRUCTURE": "DiNapoli",
+    "VAMR": "VAMR",
+    "SMRS": "SMRS"
+  }
+}

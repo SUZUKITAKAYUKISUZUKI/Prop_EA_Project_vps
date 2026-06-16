@@ -6,6 +6,8 @@
 #define CSPA_EXIT_MANAGER_MQH
 
 #define CSPA_EXIT_MAX_TRACKS 16
+#define FINTOKEI_COMMISSION_RT_USD 6.0
+#define FINTOKEI_MIN_NET_PROFIT_USD 0.50
 
 struct CspaExitTrack
 {
@@ -16,6 +18,7 @@ struct CspaExitTrack
    double   initial_sl;
    double   take_profit;
    double   atr;
+   double   lot_size;
    bool     be_enabled;
    bool     trail_enabled;
    double   be_arm_mfe_r;
@@ -90,9 +93,24 @@ double CspaExit_RatchetSl(const CspaExitTrack &t, const double current_sl, const
 }
 
 //+------------------------------------------------------------------+
+double CspaExit_CommissionSlBuffer(const string symbol, const double lot)
+{
+   if(lot <= 0.0)
+      return 0.0;
+   double tick_size = SymbolInfoDouble(symbol, SYMBOL_TRADE_TICK_SIZE);
+   double tick_value = SymbolInfoDouble(symbol, SYMBOL_TRADE_TICK_VALUE);
+   if(tick_size <= 0.0 || tick_value <= 0.0)
+      return 0.0;
+   double target_usd = FINTOKEI_COMMISSION_RT_USD * lot + FINTOKEI_MIN_NET_PROFIT_USD;
+   return target_usd * tick_size / (tick_value * lot);
+}
+
+//+------------------------------------------------------------------+
 double CspaExit_BreakevenSl(const CspaExitTrack &t, const double trail_atr)
 {
-   double buffer = t.be_buffer_atr * trail_atr;
+   double atr_buffer = t.be_buffer_atr * trail_atr;
+   double comm_buffer = CspaExit_CommissionSlBuffer(t.symbol, t.lot_size);
+   double buffer = MathMax(atr_buffer, comm_buffer);
    if(t.direction == POSITION_TYPE_BUY)
       return t.entry + buffer;
    return t.entry - buffer;
@@ -273,6 +291,9 @@ void CspaExit_Register(
    g_cspa_tracks[idx].initial_sl        = initial_sl;
    g_cspa_tracks[idx].take_profit       = take_profit;
    g_cspa_tracks[idx].atr               = atr;
+   g_cspa_tracks[idx].lot_size          = 0.0;
+   if(PositionSelectByTicket(ticket))
+      g_cspa_tracks[idx].lot_size = PositionGetDouble(POSITION_VOLUME);
    g_cspa_tracks[idx].be_enabled        = be_enabled;
    g_cspa_tracks[idx].trail_enabled     = trail_enabled;
    g_cspa_tracks[idx].be_arm_mfe_r      = be_arm_mfe_r;

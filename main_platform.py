@@ -197,7 +197,9 @@ SetupUnion = LsfcSetup | ContinuationSetup | AlsSetup | FvgFillSetup | TrefSetup
 # ■ ユーザー設定定数（ここを書き換えるだけでモード切替）
 # =============================================================================
 MODE_H1 = False  # True=H1(3年BT) / False=M5(5年ベイズ推定用)
-PROP_FIRM_PROFILE = "challenge"  # "challenge" | "funded" — Fintokei 2大プロファイル
+PROP_FIRM_PROFILE = os.environ.get("PROP_FIRM_PROFILE", "challenge").strip().lower()
+if PROP_FIRM_PROFILE not in ("challenge", "funded"):
+    PROP_FIRM_PROFILE = "challenge"
 
 PROJECT_ROOT = Path(r"C:\Prop_EA_Project")
 DATA_DIR = PROJECT_ROOT / "data"
@@ -3778,11 +3780,14 @@ class LivePipelineState:
     pair_bars: dict[str, pd.DataFrame]
     tref_bayes: Any = None
     sentinel: Any = None  # LiveSentinelState — lazy import avoided in dataclass field
+    pet: Any = None  # PetRuntimeState
+    last_pet_decision: Any = None  # PetDecision | None
 
     @classmethod
     def create(cls) -> LivePipelineState:
         from audit.live_sentinel import LiveSentinelState
         from audit.tref_bayes_filter import TrefBayesFilter
+        from core.portfolio_equity_trail import PetRuntimeState
 
         empty = _empty_live_bars()
         pair_bars = {pair: empty.copy() for pair in LIVE_CANONICAL_PAIRS}
@@ -3794,6 +3799,8 @@ class LivePipelineState:
             eur_df=pair_bars["EURUSD"].copy(),
             pair_bars=pair_bars,
             sentinel=LiveSentinelState.create(),
+            pet=PetRuntimeState.create(RM_STARTING_EQUITY),
+            last_pet_decision=None,
         )
 
 
@@ -4118,6 +4125,61 @@ def pending_to_trade_signal(pending: PendingEvaluation) -> dict[str, Any]:
     return signal
 
 
+def _pet_open_positions_payload(payload: dict[str, Any]) -> list[dict[str, Any]]:
+    """Normalize MT5 open_positions for PET ranking and cost buffer."""
+    raw = payload.get("open_positions") or []
+    out: list[dict[str, Any]] = []
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        lot = float(item.get("lot_size", item.get("volume", 0.01)) or 0.01)
+        out.append(
+            {
+                "pair": item.get("pair"),
+                "setup_type": item.get("setup_type"),
+                "lot_size": lot,
+                "ticket": item.get("ticket", item.get("position_ticket", item.get("pair"))),
+                "bayes_probability": float(item.get("bayes_probability", item.get("bayes", 0.5)) or 0.5),
+                "expected_r": float(item.get("expected_r", item.get("expected_R", 1.0)) or 1.0),
+                "risk_contribution": float(
+                    item.get("risk_contribution", item.get("risk_budget", lot)) or lot
+                ),
+            }
+        )
+    return out
+
+
+def _evaluate_live_pet(
+    state: LivePipelineState,
+    payload: dict[str, Any],
+    *,
+    equity: float,
+    balance: float,
+    server_timestamp: pd.Timestamp,
+) -> Any | None:
+    from core.portfolio_equity_trail import evaluate_pet, is_pet_enabled, resolve_pet_mode
+
+    if not is_pet_enabled(state.account.profile):
+        state.last_pet_decision = None
+        return None
+    if state.pet is None:
+        from core.portfolio_equity_trail import PetRuntimeState
+
+        state.pet = PetRuntimeState.create(state.account.equity)
+    decision = evaluate_pet(
+        state.pet,
+        current_equity=equity,
+        balance=balance,
+        server_day=server_timestamp.strftime("%Y-%m-%d"),
+        open_positions=_pet_open_positions_payload(payload),
+        phase_start_equity=state.account.phase_start_equity,
+        day_start_equity=state.account.daily_start_equity,
+        mode=resolve_pet_mode(),
+    )
+    state.last_pet_decision = decision
+    return decision
+
+
 def evaluate_trade_signal_with_pending(
     payload: dict[str, Any],
     state: LivePipelineState | None = None,
@@ -4184,6 +4246,18 @@ def evaluate_trade_signal_with_pending(
         payload.get("open_positions"),
         server_timestamp,
     )
+
+    pet_decision = _evaluate_live_pet(
+        state,
+        payload,
+        equity=equity,
+        balance=balance,
+        server_timestamp=server_timestamp,
+    )
+    if pet_decision is not None and pet_decision.close_all:
+        from core.portfolio_equity_trail import pet_panic_signal
+
+        return pet_panic_signal(pet_decision.message), None
 
     if is_live_sentinel_enabled():
         verdict = evaluate_live_sentinel(
@@ -4307,7 +4381,10 @@ def evaluate_trade_signal_with_pending(
         )
     finally:
         _restore_live_vamr_context(matched_strategy, prev_h1, prev_h4)
-    return pending_to_trade_signal(pending), pending
+    from core.portfolio_equity_trail import apply_pet_to_trade_signal
+
+    signal = pending_to_trade_signal(pending)
+    return apply_pet_to_trade_signal(signal, pet_decision), pending
 
 
 def evaluate_trade_signal(

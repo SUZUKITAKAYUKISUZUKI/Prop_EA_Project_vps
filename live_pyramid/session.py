@@ -86,6 +86,8 @@ def create_live_pyramid_session(
     kalman_velocity_at_entry: float = 0.0,
     ws_mode: bool = False,
     pyramid_group_id: str | None = None,
+    tick_size: float = 0.0,
+    tick_value: float = 0.0,
 ) -> LivePyramidSession:
     base_risk = abs(entry - sl)
     safe_atr = max(atr, base_risk * 0.01) if base_risk > 0 else atr
@@ -100,6 +102,9 @@ def create_live_pyramid_session(
         initial_stop_loss=sl,
         max_pyramid_layers=resolve_live_max_pyramid_layers(setup_type),
         daily_dd_remaining_percent=daily_dd_remaining_percent,
+        symbol=symbol,
+        tick_size=tick_size,
+        tick_value=tick_value,
     )
     group_id = pyramid_group_id or uuid.uuid4().hex[:12]
     return LivePyramidSession(

@@ -144,6 +144,8 @@ class PyramidRegisterRequest(BaseModel):
     kalman_velocity_at_entry: float = 0.0
     ws_mode: bool = False
     pyramid_group_id: str | None = None
+    tick_size: float = Field(default=0.0, ge=0.0)
+    tick_value: float = Field(default=0.0, ge=0.0)
 
 
 class PyramidTickRequest(BaseModel):
@@ -213,11 +215,18 @@ app = FastAPI(
 )
 
 try:
-    from dashboard.prop_optimizer_panel import register_dashboard
+    from dashboard.prop_optimizer_panel import register_dashboard as register_pfoo_dashboard
 
-    register_dashboard(app)
+    register_pfoo_dashboard(app)
 except ImportError:
     logger.warning("PFOO dashboard not available (dashboard package missing)")
+
+try:
+    from dashboard.pet_panel import register_dashboard as register_pet_dashboard
+
+    register_pet_dashboard(app)
+except ImportError:
+    logger.warning("PET dashboard not available (dashboard package missing)")
 
 
 def _request_to_dict(request: TradeSignalRequest) -> dict[str, Any]:
@@ -258,6 +267,13 @@ async def trade_signal(request: TradeSignalRequest) -> TradeSignalResponse:
     except Exception as exc:
         logger.exception("POST /trade_signal failed: %s", exc)
         raise HTTPException(status_code=500, detail=str(exc)) from exc
+    try:
+        from dashboard.pet_panel import update_pet_from_decision
+
+        if _pipeline_state.last_pet_decision is not None:
+            update_pet_from_decision(_pipeline_state.last_pet_decision, _pipeline_state.pet)
+    except ImportError:
+        pass
     return TradeSignalResponse(**result)
 
 
@@ -318,6 +334,39 @@ async def sentinel_status() -> dict[str, Any]:
     }
 
 
+@app.get("/pet/status", response_model=dict[str, Any])
+async def pet_status() -> dict[str, Any]:
+    """Portfolio Equity Trail runtime snapshot."""
+    from core.portfolio_equity_trail import is_pet_enabled
+
+    decision = _pipeline_state.last_pet_decision
+    runtime = _pipeline_state.pet
+    payload: dict[str, Any] = {
+        "enabled": is_pet_enabled(_pipeline_state.account.profile),
+        "profile": _pipeline_state.account.profile,
+        "runtime": None,
+        "decision": None,
+    }
+    if runtime is not None:
+        payload["runtime"] = {
+            "day_start_equity": runtime.day_start_equity,
+            "peak_equity": runtime.peak_equity,
+            "protected_equity": runtime.protected_equity,
+            "peak_gain_r": runtime.peak_gain_r,
+            "locked_profit_r": runtime.locked_profit_r,
+            "stage_name": runtime.stage_name,
+            "active": runtime.active,
+            "breached": runtime.breached,
+            "disable_new_entries": runtime.disable_new_entries,
+            "trading_halted_for_day": runtime.trading_halted_for_day,
+            "last_action": runtime.last_action,
+            "server_day": runtime.server_day,
+        }
+    if decision is not None:
+        payload["decision"] = decision.to_dict()
+    return payload
+
+
 @app.post("/reset_state")
 async def reset_state() -> dict[str, str]:
     """バックテスト/デモ切替時にセッション状態をリセット。"""
@@ -368,6 +417,8 @@ async def pyramid_register(request: PyramidRegisterRequest) -> PyramidRegisterRe
             kalman_velocity_at_entry=request.kalman_velocity_at_entry,
             ws_mode=request.ws_mode,
             pyramid_group_id=request.pyramid_group_id,
+            tick_size=request.tick_size,
+            tick_value=request.tick_value,
         )
     except RuntimeError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc

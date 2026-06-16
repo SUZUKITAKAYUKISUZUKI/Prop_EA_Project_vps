@@ -5,6 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Literal
 
+from audit.broker_costs import min_net_profit_sl
+
 from strategies.archive.cspa import (
     CSPA_BE_ARM_MFE_R,
     CSPA_BE_BUFFER_ATR,
@@ -57,8 +59,32 @@ def _ratchet_sl(direction: TradeDirection, current_sl: float, new_sl: float) -> 
     return min(current_sl, new_sl)
 
 
-def _breakeven_sl(direction: TradeDirection, entry: float, atr: float, buffer_atr: float) -> float:
-    buffer = buffer_atr * atr
+def _breakeven_sl(
+    direction: TradeDirection,
+    entry: float,
+    atr: float,
+    buffer_atr: float,
+    *,
+    lot_size: float = 0.0,
+    tick_size: float = 0.0,
+    tick_value: float = 0.0,
+    symbol: str = "",
+) -> float:
+    atr_buffer = buffer_atr * atr
+    if lot_size > 0:
+        commission_sl = min_net_profit_sl(
+            direction,
+            [(entry, lot_size)],
+            tick_size=tick_size,
+            tick_value=tick_value,
+            symbol=symbol,
+        )
+        if direction == "BUY":
+            buffer = max(atr_buffer, commission_sl - entry)
+        else:
+            buffer = max(atr_buffer, entry - commission_sl)
+    else:
+        buffer = atr_buffer
     if direction == "BUY":
         return entry + buffer
     return entry - buffer
@@ -73,6 +99,10 @@ class CspaExitTracker:
     initial_sl: float
     take_profit: float
     atr: float
+    lot_size: float = 0.0
+    tick_size: float = 0.0
+    tick_value: float = 0.0
+    symbol: str = ""
     be_enabled: bool = CSPA_BE_ENABLED
     trail_enabled: bool = CSPA_TRAIL_ENABLED
     be_arm_mfe_r: float = CSPA_BE_ARM_MFE_R
@@ -107,6 +137,10 @@ class CspaExitTracker:
         initial_sl: float,
         take_profit: float,
         exit_fields: dict[str, Any],
+        lot_size: float = 0.0,
+        tick_size: float = 0.0,
+        tick_value: float = 0.0,
+        symbol: str = "",
     ) -> CspaExitTracker:
         return cls(
             direction=direction.upper(),  # type: ignore[arg-type]
@@ -114,6 +148,10 @@ class CspaExitTracker:
             initial_sl=initial_sl,
             take_profit=take_profit,
             atr=float(exit_fields.get("exit_atr", 0.0)),
+            lot_size=float(lot_size),
+            tick_size=float(tick_size),
+            tick_value=float(tick_value),
+            symbol=str(symbol),
             be_enabled=bool(int(exit_fields.get("exit_be_enabled", int(CSPA_BE_ENABLED)))),
             trail_enabled=bool(int(exit_fields.get("exit_trail_enabled", int(CSPA_TRAIL_ENABLED)))),
             be_arm_mfe_r=float(exit_fields.get("exit_be_arm_mfe_r", CSPA_BE_ARM_MFE_R)),
@@ -132,7 +170,16 @@ class CspaExitTracker:
             return self.current_sl
 
         trail_atr = max(self.atr, risk * 0.25)
-        be_sl = _breakeven_sl(self.direction, self.entry, trail_atr, self.be_buffer_atr)
+        be_sl = _breakeven_sl(
+            self.direction,
+            self.entry,
+            trail_atr,
+            self.be_buffer_atr,
+            lot_size=self.lot_size,
+            tick_size=self.tick_size,
+            tick_value=self.tick_value,
+            symbol=self.symbol,
+        )
 
         if self.direction == "BUY":
             bar_mfe_r = (high - self.entry) / risk
