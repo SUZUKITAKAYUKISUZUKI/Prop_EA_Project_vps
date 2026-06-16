@@ -723,6 +723,17 @@ def resample_to_m15(df: pd.DataFrame) -> pd.DataFrame:
     return m15.dropna(subset=["open"]).reset_index()
 
 
+def resample_to_m5(df: pd.DataFrame) -> pd.DataFrame:
+    """M1 データを M5 へリサンプル（VAMR VP / Live M1 チャート用）。"""
+    if df.empty:
+        return df
+    indexed = df.set_index("datetime")
+    m5 = indexed.resample("5min").agg(
+        {"open": "first", "high": "max", "low": "min", "close": "last", "volume": "sum"}
+    )
+    return m5.dropna(subset=["open"]).reset_index()
+
+
 def resample_to_h4(df: pd.DataFrame) -> pd.DataFrame:
     """H1 データを H4 へリサンプル（DBBS ATR 参照用）。"""
     from strategies.bt_ohlcv import BtOhlcvFrame, resample_bars_ns
@@ -3643,7 +3654,9 @@ def print_l7_report(records: list[dict[str, Any]]) -> None:
 # =============================================================================
 # Live API — MT5 Bridge 連携 (v1.7+)
 # =============================================================================
-LIVE_BAR_BUFFER_MAX = 600
+from live_buffer_config import infer_bar_minutes, live_bar_buffer_max
+
+LIVE_BAR_BUFFER_MAX = 2000  # legacy alias; prefer live_bar_buffer_max(pair)
 BROKER_POSITION_SETUP_TYPE = "BROKER_POSITION"
 BROKER_POSITION_HORIZON = pd.Timedelta(days=365)
 LIVE_EXEC_BAR_MINUTES = 5  # PropEA_Bridge.mq5 uses PERIOD_M5
@@ -3659,15 +3672,49 @@ def upsert_live_pair_buffers(
     pair: str,
     incoming: pd.DataFrame,
 ) -> pd.DataFrame:
-    """Upsert M5 (or bridge) bars for a canonical pair into session buffers."""
+    """Upsert bridge bars for a canonical pair into session buffers."""
     current = state.pair_bars.get(pair, _empty_live_bars())
-    updated = upsert_live_bars(current, incoming) if not current.empty else incoming.copy()
+    cap = live_bar_buffer_max(pair)
+    updated = upsert_live_bars(current, incoming, max_bars=cap)
     state.pair_bars[pair] = updated
     if pair == "GBPUSD":
         state.gbp_df = updated
     elif pair == "EURUSD":
         state.eur_df = updated
     return updated
+
+
+def _live_vamr_frames(bars: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Build H1/H4 frames for VAMR enrich from the live pair buffer."""
+    if bars.empty:
+        empty = _empty_live_bars()
+        return empty, empty
+    h1 = resample_to_h1(bars)
+    h4 = resample_to_h4(h1) if not h1.empty else h1
+    return h1, h4
+
+
+def _attach_live_vamr_context(strategy: BaseStrategy, bars: pd.DataFrame) -> tuple[Any, Any]:
+    """Temporarily attach live H1/H4 frames for VAMR analyze_setup."""
+    from strategies.vamr import VamrStrategy
+
+    if not isinstance(strategy, VamrStrategy):
+        return None, None
+    h1, h4 = _live_vamr_frames(bars)
+    prev_h1 = getattr(strategy, "_live_h1_df", None)
+    prev_h4 = getattr(strategy, "_live_h4_df", None)
+    strategy._live_h1_df = h1  # type: ignore[attr-defined]
+    strategy._live_h4_df = h4  # type: ignore[attr-defined]
+    return prev_h1, prev_h4
+
+
+def _restore_live_vamr_context(strategy: BaseStrategy, prev_h1: Any, prev_h4: Any) -> None:
+    from strategies.vamr import VamrStrategy
+
+    if not isinstance(strategy, VamrStrategy):
+        return
+    strategy._live_h1_df = prev_h1  # type: ignore[attr-defined]
+    strategy._live_h4_df = prev_h4  # type: ignore[attr-defined]
 
 
 def _detect_setups_for_live_pair(
@@ -3701,8 +3748,14 @@ def _detect_setups_for_live_pair(
     if isinstance(strategy, VamrStrategy):
         if pair not in VAMR_PAIRS:
             return []
-        h1 = resample_to_h1(bars)
-        return strategy.detect_setups(bars, pair, h1_df=h1, m5_df=bars)
+        if infer_bar_minutes(bars) <= 1:
+            m5_df = resample_to_m5(bars)
+            h1 = resample_to_h1(bars)
+        else:
+            m5_df = bars
+            h1 = resample_to_h1(bars)
+        h4 = resample_to_h4(h1) if not h1.empty else h1
+        return strategy.detect_setups(m5_df, pair, h1_df=h1, m5_df=m5_df, h4_df=h4)
 
     if pair not in ("GBPUSD", "EURUSD"):
         return []
@@ -3782,8 +3835,14 @@ def market_payload_to_bar(
     }
 
 
-def upsert_live_bars(existing: pd.DataFrame, incoming: pd.DataFrame) -> pd.DataFrame:
-    """ライブバッファへ追記し、最大件数でトリム。"""
+def upsert_live_bars(
+    existing: pd.DataFrame,
+    incoming: pd.DataFrame,
+    *,
+    max_bars: int | None = None,
+) -> pd.DataFrame:
+    """ライブバッファへ追記し、ペア別最大件数でトリム。"""
+    cap = max_bars if max_bars is not None else LIVE_BAR_BUFFER_MAX
     if incoming.empty:
         return existing
     if existing.empty:
@@ -3794,8 +3853,8 @@ def upsert_live_bars(existing: pd.DataFrame, incoming: pd.DataFrame) -> pd.DataF
             .sort_values("datetime")
             .drop_duplicates("datetime", keep="last")
         )
-    if len(merged) > LIVE_BAR_BUFFER_MAX:
-        merged = merged.iloc[-LIVE_BAR_BUFFER_MAX:].reset_index(drop=True)
+    if len(merged) > cap:
+        merged = merged.iloc[-cap:].reset_index(drop=True)
     return merged
 
 
@@ -4223,24 +4282,29 @@ def evaluate_trade_signal_with_pending(
     monthly_rem = state.account.monthly_dd_remaining()
     daily_loss_fraction = state.account.daily_loss_fraction()
 
-    pending = _evaluate_setup_at_timestamp(
-        matched_strategy,
-        active,
-        gbp_s,
-        eur_s,
-        state.account,
-        equity_snapshot,
-        daily_rem,
-        monthly_rem,
-        daily_loss_fraction,
-        h1_gbp,
-        h1_eur,
-        track_gbp,
-        track_eur,
-        state.bayes_engine,
-        tref_bayes_filter=state.tref_bayes,
-        minutes_to_news_override=minutes_to_news,
-    )
+    pair_bars = state.pair_bars.get(pair, _empty_live_bars())
+    prev_h1, prev_h4 = _attach_live_vamr_context(matched_strategy, pair_bars)
+    try:
+        pending = _evaluate_setup_at_timestamp(
+            matched_strategy,
+            active,
+            gbp_s,
+            eur_s,
+            state.account,
+            equity_snapshot,
+            daily_rem,
+            monthly_rem,
+            daily_loss_fraction,
+            h1_gbp,
+            h1_eur,
+            track_gbp,
+            track_eur,
+            state.bayes_engine,
+            tref_bayes_filter=state.tref_bayes,
+            minutes_to_news_override=minutes_to_news,
+        )
+    finally:
+        _restore_live_vamr_context(matched_strategy, prev_h1, prev_h4)
     return pending_to_trade_signal(pending), pending
 
 

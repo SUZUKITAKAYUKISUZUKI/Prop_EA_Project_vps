@@ -8,7 +8,7 @@
 
 input string InpApiUrl              = "http://127.0.0.1:8000/trade_signal";
 input int    InpTimerSeconds        = 60;          // シグナル照会間隔（秒）
-input int    InpHistoryBars         = 300;         // Pythonへ送る履歴本数（SMRS=M1 / 他=M5）
+input int    InpHistoryBars         = 300;         // 最小履歴本数（RequiredHistoryBars 未満にはならない）
 input int    InpMinutesToNews       = 45;          // 次ニュースまでの分数（暫定）
 input string InpNewsImpact          = "HIGH";      // LOW / MEDIUM / HIGH
 input double InpMaxSpreadPoints     = 30;          // 最大許容スプレッド
@@ -109,6 +109,25 @@ ENUM_TIMEFRAMES BarTimeframeForSymbol(const string symbol)
 }
 
 //+------------------------------------------------------------------+
+int RequiredHistoryBars(const string symbol)
+{
+   // Keep in sync with live_buffer_config.py (LIVE_M1/M5_HISTORY_BARS).
+   ENUM_TIMEFRAMES tf = BarTimeframeForSymbol(symbol);
+   if(tf == PERIOD_M1)
+      return 7500;  // SMRS rolling stats + VAMR H1>=120 via M1 resample
+   return 1800;     // DBBS H1>=60 + VAMR WARMUP 120 via M5 resample
+}
+
+//+------------------------------------------------------------------+
+int EffectiveHistoryBars(const string symbol)
+{
+   int required = RequiredHistoryBars(symbol);
+   if(InpHistoryBars > required)
+      return InpHistoryBars;
+   return required;
+}
+
+//+------------------------------------------------------------------+
 string BuildBarsJson(const string symbol, const ENUM_TIMEFRAMES tf, const int count)
 {
    MqlRates rates[];
@@ -204,7 +223,7 @@ string BuildOpenPositionsJson()
          continue;
 
       string pair = CanonicalPair(PositionGetString(POSITION_SYMBOL));
-      if(pair != "EURUSD" && pair != "GBPUSD")
+      if(pair == "")
          continue;
 
       string comment = PositionGetString(POSITION_COMMENT);
@@ -238,7 +257,7 @@ string BuildRequestJson(const string symbol, const ENUM_TIMEFRAMES tf)
 
    string pair = CanonicalPair(symbol);
 
-   string bars_json = BuildBarsJson(symbol, tf, InpHistoryBars);
+   string bars_json = BuildBarsJson(symbol, tf, EffectiveHistoryBars(symbol));
    if(bars_json == "")
       return "";
 
@@ -708,6 +727,8 @@ int OnInit()
    PyramidLive_SetApiBaseFromTradeUrl(InpApiUrl);
    EventSetTimer(InpTimerSeconds);
    Print("PropEA_Bridge initialized. API=", InpApiUrl, " corr=", g_correlated_symbol,
+         " tf=", EnumToString(BarTimeframeForSymbol(_Symbol)),
+         " history=", EffectiveHistoryBars(_Symbol),
          " pyramid_live=", (InpPyramidLiveEnabled ? "on" : "off"));
    return INIT_SUCCEEDED;
 }

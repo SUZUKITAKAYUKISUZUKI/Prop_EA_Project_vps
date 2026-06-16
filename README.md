@@ -79,7 +79,17 @@ PYRAMID_SMRS=0
 
 `MUTUAL_EXCLUSION_MODE=daily` / `concurrent` は **廃止**。VPS `.env` から削除してください。
 
-**VPS 反映時:** `PropEA_Bridge.mq5` を **再コンパイル・再アタッチ**（letter E 対応版）。
+**VPS 反映時:** `PropEA_Bridge.mq5` を **再コンパイル・再アタッチ**（letter E 対応版）。  
+Live 履歴は MT5 チャートから **ペア別に自動取得**（M5=1800本 / M1=7500本）— `live_buffer_config.py` と MQ5 `RequiredHistoryBars()` を同期。
+
+## Live 履歴バッファ（7チャート運用）
+
+| チャート足 | MT5 取得本数 | Python 上限 | 用途 |
+|-----------|-------------|--------------|------|
+| M5 | 1800 | 2000 | DBBS / VAMR（H1≥120） |
+| M1 | 7500 | 8000 | SMRS + VAMR（M1→H1/M5） |
+
+初回リクエストでチャート過去足を一括シードし、以降は新バーごとに upsert します。
 
 ## 同梱ファイル（manifest v8 必須）
 

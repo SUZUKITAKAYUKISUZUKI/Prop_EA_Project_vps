@@ -22,6 +22,7 @@ from walkforward_runner import iter_wft_windows
 
 os.environ.setdefault("PROFIT_CUSHION_ENABLED", "1")
 os.environ.setdefault("TWIN_BRAKE_ENABLED", "1")
+os.environ.setdefault("DD_THROTTLING_ENABLED", "1")
 
 PHASE2_TARGET_PCT = 6.0
 BASE_RISK_PCT = 1.0

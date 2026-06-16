@@ -212,6 +212,13 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+try:
+    from dashboard.prop_optimizer_panel import register_dashboard
+
+    register_dashboard(app)
+except ImportError:
+    logger.warning("PFOO dashboard not available (dashboard package missing)")
+
 
 def _request_to_dict(request: TradeSignalRequest) -> dict[str, Any]:
     payload = request.model_dump(exclude_none=True)

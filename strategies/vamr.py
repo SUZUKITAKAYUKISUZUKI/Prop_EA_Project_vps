@@ -118,9 +118,25 @@ def _session_start_ts(ts: pd.Timestamp) -> pd.Timestamp:
     return start
 
 
-def enrich_vamr_setup_row(setup: VarSetup) -> dict[str, Any]:
+def enrich_vamr_setup_row(
+    setup: VarSetup,
+    *,
+    h1_df: pd.DataFrame | None = None,
+    h4_df: pd.DataFrame | None = None,
+) -> dict[str, Any]:
     pair = str(setup.pair).upper()
-    h1, h4 = _load_pair_h1_h4(pair)
+    if h1_df is not None and not h1_df.empty:
+        h1 = h1_df.copy()
+        if h4_df is not None and not h4_df.empty:
+            h4 = h4_df.copy()
+        else:
+            from strategies.bt_ohlcv import BtOhlcvFrame, resample_bars_ns
+
+            frame = BtOhlcvFrame.from_pandas(h1)
+            bar_ns = int(np.timedelta64(240, "m") / np.timedelta64(1, "ns"))
+            h4 = resample_bars_ns(frame, bar_ns).to_pandas()
+    else:
+        h1, h4 = _load_pair_h1_h4(pair)
     bar_i = int(setup.bar_index)
     if bar_i < 0 or bar_i >= len(h1):
         raise IndexError(f"VAMR bar_index out of range for {pair}: {bar_i}")
@@ -272,7 +288,9 @@ class VamrStrategy(BaseStrategy):
             return reject
 
         try:
-            row = enrich_vamr_setup_row(setup)
+            h1_df = getattr(self, "_live_h1_df", None)
+            h4_df = getattr(self, "_live_h4_df", None)
+            row = enrich_vamr_setup_row(setup, h1_df=h1_df, h4_df=h4_df)
         except (IndexError, KeyError, FileNotFoundError) as exc:
             logger.debug("VAMR enrich skip %s: %s", setup.pair, exc)
             return reject
