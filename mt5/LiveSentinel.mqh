@@ -21,6 +21,8 @@ double   g_ls_floating_dd_pct   = 0.0;
 bool     g_ls_entry_locked      = false;
 bool     g_ls_terminator_fired  = false;
 bool     g_ls_spread_hold       = false;
+datetime g_ls_last_spread_log   = 0;
+long     g_ls_last_spread_logged = -1;
 
 //+------------------------------------------------------------------+
 datetime LiveSentinel_ServerDay(const datetime server_time)
@@ -210,7 +212,12 @@ bool LiveSentinel_EntryAllowed(
    if(spread_points > max_spread_points)
    {
       g_ls_spread_hold = true;
-      Print("LIVE_SENTINEL spread block | spread=", spread_points, " max=", max_spread_points);
+      if(server_time - g_ls_last_spread_log >= 60 || spread_points != g_ls_last_spread_logged)
+      {
+         Print("LIVE_SENTINEL spread block | spread=", spread_points, " max=", max_spread_points);
+         g_ls_last_spread_log = server_time;
+         g_ls_last_spread_logged = spread_points;
+      }
       return false;
    }
    g_ls_spread_hold = false;

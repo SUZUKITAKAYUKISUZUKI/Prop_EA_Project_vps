@@ -33,9 +33,54 @@ string CanonicalPair(const string symbol)
    StringReplace(upper, ".", "");
    StringReplace(upper, "_", "");
    StringReplace(upper, "-", "");
-   if(StringFind(upper, "GBPUSD") >= 0) return "GBPUSD";
-   if(StringFind(upper, "EURUSD") >= 0) return "EURUSD";
+   StringReplace(upper, " ", "");
+
+   // Longest-first — keep in sync with strategies/market_utils.py LIVE_CANONICAL_PAIRS
+   string pairs[] = {
+      "EURGBP", "GBPUSD", "USDCAD", "AUDNZD", "EURUSD",
+      "AUDUSD", "NZDUSD", "XAUUSD", "USDJPY", "AUDJPY"
+   };
+   for(int i = 0; i < ArraySize(pairs); i++)
+   {
+      if(StringFind(upper, pairs[i]) == 0)
+         return pairs[i];
+   }
    return upper;
+}
+
+//+------------------------------------------------------------------+
+long MaxSpreadForSymbol(const string symbol)
+{
+   string canonical = CanonicalPair(symbol);
+   long base = (long)InpMaxSpreadPoints;
+   if(canonical == "XAUUSD")
+      return (long)MathMax(base, 80);
+   if(canonical == "AUDNZD" || canonical == "EURGBP" || canonical == "NZDUSD")
+      return (long)MathMax(base, 45);
+   if(canonical == "USDCAD")
+      return (long)MathMax(base, 40);
+   return base;
+}
+
+//+------------------------------------------------------------------+
+int WebRequestTimeoutMs(const string symbol)
+{
+   int bars = EffectiveHistoryBars(symbol);
+   int ms = 15000 + bars * 10;
+   return (int)MathMin(ms, 90000);
+}
+
+//+------------------------------------------------------------------+
+int PairRequestStaggerMs(const string symbol)
+{
+   string canonical = CanonicalPair(symbol);
+   string order[] = {"EURUSD", "GBPUSD", "XAUUSD", "USDCAD", "AUDNZD", "EURGBP", "NZDUSD"};
+   for(int i = 0; i < ArraySize(order); i++)
+   {
+      if(canonical == order[i])
+         return i * 1200;
+   }
+   return 0;
 }
 
 //+------------------------------------------------------------------+
@@ -348,7 +393,7 @@ bool PostTradeSignal(const string body, string &response)
    ArrayResize(post, StringLen(body));
 
    string headers = "Content-Type: application/json\r\n";
-   int timeout_ms = 5000;
+   int timeout_ms = WebRequestTimeoutMs(_Symbol);
    int status = WebRequest(
       "POST",
       InpApiUrl,
@@ -456,7 +501,8 @@ bool execute_trade(
    if(action != "BUY" && action != "SELL")
       return false;
 
-   if(!LiveSentinel_EntryAllowed(TimeCurrent(), SymbolInfoInteger(symbol, SYMBOL_SPREAD), InpMaxSpreadPoints))
+   long max_spread = MaxSpreadForSymbol(symbol);
+   if(!LiveSentinel_EntryAllowed(TimeCurrent(), SymbolInfoInteger(symbol, SYMBOL_SPREAD), max_spread))
    {
       Print("execute_trade skip - Live Sentinel entry block");
       return false;
@@ -466,7 +512,7 @@ bool execute_trade(
    // Do not block at symbol level — A+B+C may hold LSFC/DBBS/DiNapoli on the same pair.
 
    long spread = SymbolInfoInteger(symbol, SYMBOL_SPREAD);
-   if(spread > InpMaxSpreadPoints)
+   if(spread > max_spread)
    {
       Print("execute_trade skip - spread too wide: ", spread);
       return false;
@@ -565,7 +611,7 @@ bool execute_trade(
 //+------------------------------------------------------------------+
 bool close_trade(const string symbol)
 {
-   if(LiveSentinel_ShouldHoldLogicClose(symbol, InpMaxSpreadPoints))
+   if(LiveSentinel_ShouldHoldLogicClose(symbol, MaxSpreadForSymbol(symbol)))
       return false;
 
    for(int i = PositionsTotal() - 1; i >= 0; i--)
@@ -692,14 +738,18 @@ void RequestPipelineSignal()
    if(CopyRates(symbol, tf, 0, 1, rates) != 1)
       return;
 
-   datetime server_time = TimeCurrent();
-   long spread_pts = SymbolInfoInteger(symbol, SYMBOL_SPREAD);
-   if(!LiveSentinel_EntryAllowed(server_time, spread_pts, InpMaxSpreadPoints))
-      return;
-
-   // 新バー確定時のみ照会（OnTimerと併用）
+   // 新バー確定時のみ照会（OnTimerと併用）— spread block より先に dedup してログ洪水を防ぐ
    if(rates[0].time == g_last_bar_time && TimeCurrent() - g_last_request < InpTimerSeconds)
       return;
+
+   datetime server_time = TimeCurrent();
+   long spread_pts = SymbolInfoInteger(symbol, SYMBOL_SPREAD);
+   long max_spread = MaxSpreadForSymbol(symbol);
+   if(!LiveSentinel_EntryAllowed(server_time, spread_pts, max_spread))
+   {
+      g_last_request = TimeCurrent();
+      return;
+   }
 
    string body = BuildRequestJson(symbol, tf);
    if(body == "")
@@ -726,9 +776,14 @@ int OnInit()
 
    PyramidLive_SetApiBaseFromTradeUrl(InpApiUrl);
    EventSetTimer(InpTimerSeconds);
+   int stagger_ms = PairRequestStaggerMs(_Symbol);
+   if(stagger_ms > 0)
+      Sleep(stagger_ms);
    Print("PropEA_Bridge initialized. API=", InpApiUrl, " corr=", g_correlated_symbol,
          " tf=", EnumToString(BarTimeframeForSymbol(_Symbol)),
          " history=", EffectiveHistoryBars(_Symbol),
+         " max_spread=", MaxSpreadForSymbol(_Symbol),
+         " http_timeout_ms=", WebRequestTimeoutMs(_Symbol),
          " pyramid_live=", (InpPyramidLiveEnabled ? "on" : "off"));
    return INIT_SUCCEEDED;
 }
