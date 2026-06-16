@@ -22,7 +22,7 @@ from prop_audit_reporter import (
     generate_window_starts,
 )
 from strategies.vamr_features import profit_factor
-from strategies.vamr_phase2 import max_drawdown_r, sharpe_r
+from strategies.smrs_sizing import max_drawdown_r, sharpe_r
 
 os.environ.setdefault("PROFIT_CUSHION_ENABLED", "1")
 os.environ.setdefault("TWIN_BRAKE_ENABLED", "1")
