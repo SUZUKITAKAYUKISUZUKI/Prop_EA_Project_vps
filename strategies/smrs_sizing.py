@@ -18,7 +18,6 @@ from prop_audit_reporter import (
     _simulated_daily_dd_remaining_percent,
 )
 from strategies.smrs_bayes import profit_factor
-from walkforward_runner import iter_wft_windows
 
 os.environ.setdefault("PROFIT_CUSHION_ENABLED", "1")
 os.environ.setdefault("TWIN_BRAKE_ENABLED", "1")
@@ -288,6 +287,8 @@ def assign_wft_window(df: pd.DataFrame) -> pd.DataFrame:
     if "wft_window_id" in out.columns and out["wft_window_id"].notna().any():
         out["wft_window_id"] = pd.to_numeric(out["wft_window_id"], errors="coerce").fillna(-1).astype(int)
         return out
+    from walkforward_runner import iter_wft_windows
+
     windows = list(
         iter_wft_windows(
             WFT_START,

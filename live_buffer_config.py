@@ -20,6 +20,18 @@ def live_bar_buffer_max(pair: str) -> int:
     return LIVE_M5_BAR_BUFFER_MAX
 
 
+def max_spread_points_for_pair(pair: str, base: int = 30) -> int:
+    """Keep in sync with mt5/PropEA_Bridge.mq5 MaxSpreadForSymbol()."""
+    canonical = str(pair).upper()
+    if canonical == "XAUUSD":
+        return max(base, 80)
+    if canonical in ("AUDNZD", "EURGBP", "NZDUSD"):
+        return max(base, 45)
+    if canonical == "USDCAD":
+        return max(base, 40)
+    return base
+
+
 def infer_bar_minutes(df) -> int:
     """Infer bar size from the last two timestamps (1=M1 chart, 5=M5 chart)."""
     if df is None or df.empty or len(df) < 2:

@@ -23,7 +23,6 @@ from prop_audit_reporter import (
 )
 from strategies.vamr_features import profit_factor
 from strategies.vamr_phase2 import max_drawdown_r, sharpe_r
-from walkforward_runner import iter_wft_windows
 
 os.environ.setdefault("PROFIT_CUSHION_ENABLED", "1")
 os.environ.setdefault("TWIN_BRAKE_ENABLED", "1")
@@ -265,6 +264,8 @@ def summarize_sized_trades(df: pd.DataFrame) -> dict[str, Any]:
 def assign_wft_window(df: pd.DataFrame) -> pd.DataFrame:
     out = df.copy()
     out["timestamp"] = pd.to_datetime(out["timestamp"])
+    from walkforward_runner import iter_wft_windows
+
     windows = list(
         iter_wft_windows(
             WFT_START,

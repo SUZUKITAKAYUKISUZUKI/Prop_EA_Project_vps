@@ -70,6 +70,7 @@ from audit import dd_throttling as audit_dd_throttle
 from audit.live_sentinel import (
     evaluate_live_sentinel,
     is_live_sentinel_enabled,
+    MAX_SPREAD_POINTS,
     parse_server_time,
     sentinel_hold_signal,
     sentinel_panic_signal,
@@ -3654,7 +3655,7 @@ def print_l7_report(records: list[dict[str, Any]]) -> None:
 # =============================================================================
 # Live API — MT5 Bridge 連携 (v1.7+)
 # =============================================================================
-from live_buffer_config import infer_bar_minutes, live_bar_buffer_max
+from live_buffer_config import infer_bar_minutes, live_bar_buffer_max, max_spread_points_for_pair
 
 LIVE_BAR_BUFFER_MAX = 2000  # legacy alias; prefer live_bar_buffer_max(pair)
 BROKER_POSITION_SETUP_TYPE = "BROKER_POSITION"
@@ -4191,6 +4192,7 @@ def evaluate_trade_signal_with_pending(
             balance,
             equity,
             spread_points=spread_points,
+            max_spread_points=max_spread_points_for_pair(pair, MAX_SPREAD_POINTS),
         )
         if verdict.panic_close:
             return sentinel_panic_signal(verdict.message, tags=verdict.tags), None
