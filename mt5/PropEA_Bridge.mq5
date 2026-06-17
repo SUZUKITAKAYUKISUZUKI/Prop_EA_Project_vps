@@ -569,6 +569,78 @@ double NormalizeLot(const string symbol, const double lot)
 }
 
 //+------------------------------------------------------------------+
+double NormalizeTradePrice(const string symbol, const double price)
+{
+   int digits = (int)SymbolInfoInteger(symbol, SYMBOL_DIGITS);
+   return NormalizeDouble(price, digits);
+}
+
+//+------------------------------------------------------------------+
+bool AdjustStopsForDeal(
+   const string symbol,
+   const string action,
+   const double market_price,
+   double &sl,
+   double &tp,
+   const bool log_adjustments
+)
+{
+   double point = SymbolInfoDouble(symbol, SYMBOL_POINT);
+   if(point <= 0.0)
+      point = 0.00001;
+
+   int stops_level = (int)SymbolInfoInteger(symbol, SYMBOL_TRADE_STOPS_LEVEL);
+   double min_dist = (stops_level + 2) * point;
+
+   double orig_sl = sl;
+   double orig_tp = tp;
+   sl = NormalizeTradePrice(symbol, sl);
+   tp = NormalizeTradePrice(symbol, tp);
+
+   if(action == "BUY")
+   {
+      if(sl > 0.0)
+      {
+         if(sl >= market_price || (market_price - sl) < min_dist)
+            sl = NormalizeTradePrice(symbol, market_price - min_dist);
+      }
+      if(tp > 0.0)
+      {
+         if(tp <= market_price || (tp - market_price) < min_dist)
+            tp = NormalizeTradePrice(symbol, market_price + min_dist);
+      }
+   }
+   else if(action == "SELL")
+   {
+      if(sl > 0.0)
+      {
+         if(sl <= market_price || (sl - market_price) < min_dist)
+            sl = NormalizeTradePrice(symbol, market_price + min_dist);
+      }
+      if(tp > 0.0)
+      {
+         if(tp >= market_price || (market_price - tp) < min_dist)
+            tp = NormalizeTradePrice(symbol, market_price - min_dist);
+      }
+   }
+
+   if(log_adjustments && (MathAbs(sl - orig_sl) > point * 0.5 || MathAbs(tp - orig_tp) > point * 0.5))
+   {
+      Print(
+         "execute_trade adjusted stops for broker min distance (stops_level=",
+         stops_level,
+         " point=", DoubleToString(point, (int)SymbolInfoInteger(symbol, SYMBOL_DIGITS)),
+         ") sl ", DoubleToString(orig_sl, (int)SymbolInfoInteger(symbol, SYMBOL_DIGITS)),
+         "->", DoubleToString(sl, (int)SymbolInfoInteger(symbol, SYMBOL_DIGITS)),
+         " tp ", DoubleToString(orig_tp, (int)SymbolInfoInteger(symbol, SYMBOL_DIGITS)),
+         "->", DoubleToString(tp, (int)SymbolInfoInteger(symbol, SYMBOL_DIGITS)),
+         " market=", DoubleToString(market_price, (int)SymbolInfoInteger(symbol, SYMBOL_DIGITS))
+      );
+   }
+   return (sl > 0.0 || tp > 0.0);
+}
+
+//+------------------------------------------------------------------+
 double CalcLotFromRiskBudget(
    const string symbol,
    const double risk_budget,
@@ -648,16 +720,24 @@ bool execute_trade(
    request.price        = (action == "BUY")
       ? SymbolInfoDouble(symbol, SYMBOL_ASK)
       : SymbolInfoDouble(symbol, SYMBOL_BID);
-   request.sl           = sl;
-   request.tp           = tp;
    request.deviation    = 20;
    request.magic        = InpMagic;
    request.comment      = comment;
    request.type_filling = ResolveFillingMode(symbol);
 
+   double deal_sl = sl;
+   double deal_tp = tp;
+   AdjustStopsForDeal(symbol, action, request.price, deal_sl, deal_tp, true);
+   request.sl = deal_sl;
+   request.tp = deal_tp;
+
    if(!OrderSend(request, result))
    {
-      Print("execute_trade OrderSend failed: retcode=", result.retcode, " ", result.comment);
+      Print(
+         "execute_trade OrderSend failed: retcode=", result.retcode, " ", result.comment,
+         " price=", request.price, " sl=", request.sl, " tp=", request.tp,
+         " stops_level=", SymbolInfoInteger(symbol, SYMBOL_TRADE_STOPS_LEVEL)
+      );
       return false;
    }
 
