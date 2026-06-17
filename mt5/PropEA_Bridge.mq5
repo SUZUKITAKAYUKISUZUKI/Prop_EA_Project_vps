@@ -459,14 +459,20 @@ bool BridgeHealthCheck()
 //+------------------------------------------------------------------+
 bool PostTradeSignal(const string body, string &response)
 {
-   int stagger_ms = PropEA_PairRequestStaggerMs(_Symbol);
-   if(stagger_ms > 0)
-      Sleep(stagger_ms);
-
-   int wait_ms = WebRequestTimeoutMs(_Symbol) + stagger_ms + 15000;
-   if(!PropEA_WaitAcquireWebRequestLock(wait_ms))
+   int timeout_ms = WebRequestTimeoutMs(_Symbol);
+   int turn_wait_ms = PropEA_ComputeFleetTurnWaitMs(timeout_ms);
+   int my_slot = PropEA_RequestSlotIndex(_Symbol);
+   if(!PropEA_WaitForRequestTurn(_Symbol, turn_wait_ms, timeout_ms))
    {
-      Print("PostTradeSignal deferred — WebRequest queue timeout (", wait_ms, "ms) symbol=", _Symbol);
+      Print("PostTradeSignal deferred — fleet turn queue timeout (", turn_wait_ms,
+            "ms) slot=", my_slot, " symbol=", _Symbol);
+      return false;
+   }
+
+   if(!PropEA_WaitAcquireWebRequestLock(15000))
+   {
+      Print("PostTradeSignal deferred — WebRequest lock busy slot=", my_slot, " symbol=", _Symbol);
+      PropEA_AdvanceRequestTurn(_Symbol);
       return false;
    }
 
@@ -477,7 +483,6 @@ bool PostTradeSignal(const string body, string &response)
    ArrayResize(post, StringLen(body));
 
    string headers = "Content-Type: application/json\r\n";
-   int timeout_ms = WebRequestTimeoutMs(_Symbol);
    int status = -1;
    for(int attempt = 0; attempt < 5; attempt++)
    {
@@ -500,6 +505,7 @@ bool PostTradeSignal(const string body, string &response)
       break;
    }
    PropEA_ReleaseWebRequestLock();
+   PropEA_AdvanceRequestTurn(_Symbol);
 
    if(status == -1)
    {
@@ -829,8 +835,8 @@ void RequestPipelineSignal()
    if(CopyRates(symbol, tf, 0, 1, rates) != 1)
       return;
 
-   // 新バー確定時のみ照会（OnTimerと併用）— spread block より先に dedup してログ洪水を防ぐ
-   if(rates[0].time == g_last_bar_time && TimeCurrent() - g_last_request < InpTimerSeconds)
+   // 新バー確定時のみ照会 — OnTimer/OnTick 両方から来ても同一バーは1回
+   if(rates[0].time == g_last_bar_time)
       return;
 
    g_pipeline_in_flight = true;

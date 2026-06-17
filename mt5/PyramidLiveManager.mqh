@@ -52,14 +52,18 @@ string PyramidLive_ApiUrl(const string path)
 //+------------------------------------------------------------------+
 bool PyramidLive_PostJson(const string url, const string body, string &response)
 {
-   int stagger_ms = PropEA_PairRequestStaggerMs(_Symbol);
-   if(stagger_ms > 0)
-      Sleep(stagger_ms);
-
-   int wait_ms = 15000 + stagger_ms + 5000;
-   if(!PropEA_WaitAcquireWebRequestLock(wait_ms))
+   const int timeout_ms = 5000;
+   int turn_wait_ms = PropEA_ComputeFleetTurnWaitMs(timeout_ms);
+   if(!PropEA_WaitForRequestTurn(_Symbol, turn_wait_ms, timeout_ms))
    {
-      Print("PyramidLive_PostJson deferred — WebRequest queue timeout (", wait_ms, "ms)");
+      Print("PyramidLive_PostJson deferred — fleet turn queue timeout (", turn_wait_ms, "ms) symbol=", _Symbol);
+      return false;
+   }
+
+   if(!PropEA_WaitAcquireWebRequestLock(10000))
+   {
+      Print("PyramidLive_PostJson deferred — WebRequest lock busy symbol=", _Symbol);
+      PropEA_AdvanceRequestTurn(_Symbol);
       return false;
    }
 
@@ -70,7 +74,6 @@ bool PyramidLive_PostJson(const string url, const string body, string &response)
    ArrayResize(post, StringLen(body));
 
    string headers = "Content-Type: application/json\r\n";
-   int timeout_ms = 5000;
    int status = -1;
    for(int attempt = 0; attempt < 3; attempt++)
    {
@@ -93,6 +96,7 @@ bool PyramidLive_PostJson(const string url, const string body, string &response)
       break;
    }
    PropEA_ReleaseWebRequestLock();
+   PropEA_AdvanceRequestTurn(_Symbol);
 
    if(status == -1)
    {
