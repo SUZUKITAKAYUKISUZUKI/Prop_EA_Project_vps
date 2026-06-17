@@ -20,6 +20,25 @@ LIVE_PYRAMID_USE_MARKET_FALLBACK = _env_flag("LIVE_PYRAMID_USE_MARKET_FALLBACK")
 LIVE_PYRAMID_TRIGGER_R = _env_float("LIVE_PYRAMID_TRIGGER_R", 1.0)
 
 
+def live_pyramid_be_after_tp_enabled() -> bool:
+    explicit = _env_flag("LIVE_PYRAMID_BE_AFTER_TP")
+    if explicit is None:
+        return True
+    return explicit
+
+
+def resolve_live_pyramid_trigger_r(setup_type: str | None = None) -> float:
+    """Arm breakeven only after TP distance when live TP cap is enabled."""
+    base = LIVE_PYRAMID_TRIGGER_R
+    if live_pyramid_be_after_tp_enabled():
+        from audit.live_tp_cap import is_live_tp_cap_enabled, live_tp_max_r
+
+        if is_live_tp_cap_enabled():
+            buffer = _env_float("LIVE_PYRAMID_BE_TP_BUFFER_R", 0.05)
+            return max(base, live_tp_max_r(setup_type) + buffer)
+    return base
+
+
 def live_pyramid_env_enabled() -> bool:
     explicit = _env_flag("LIVE_PYRAMID_ENABLED")
     if explicit is not None:

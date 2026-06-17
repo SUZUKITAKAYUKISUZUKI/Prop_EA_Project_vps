@@ -2939,29 +2939,29 @@ def _evaluate_setup_at_timestamp(
 
     trade_risk_pct = compute_trade_risk_pct(base_risk_pct, lot_factor)
     if not is_reject and trade_risk_pct > 0.0 and not defense_pure:
-        if account.would_exceed_daily_exposure(trade_risk_pct):
-            capped_lf, was_capped = audit_rm.cap_lot_factor_to_daily_exposure(
+        lot_factor, risk_budget, lot_size, cap_tags, reject_l0 = (
+            audit_rm.finalize_lot_factor_for_execution(
                 lot_factor,
-                base_risk_pct,
-                account.daily_committed_risk_pct,
+                base_risk_pct=base_risk_pct,
+                sl_distance=sl_distance,
+                equity=equity_snapshot,
+                daily_committed_risk_pct=account.daily_committed_risk_pct,
+                max_loss_r=1.0,
             )
-            if was_capped and capped_lf > 0.0:
-                lot_factor = audit_rm.apply_lot_factor_floor(capped_lf)
-                trade_risk_pct = compute_trade_risk_pct(base_risk_pct, lot_factor)
-                risk_budget = round(equity_snapshot * base_risk_pct * lot_factor, 2)
-                lot_size = audit_rm.lot_from_risk_budget(
-                    risk_budget, sl_distance, lot_factor
-                )
-                if "DAILY_EXPOSURE_CAPPED" not in tags:
-                    tags.append("DAILY_EXPOSURE_CAPPED")
-            else:
-                tags = ["DAILY_EXPOSURE_LIMIT_EXCEEDED"]
-                decision_source = "REJECT_BY_L0"
-                is_reject = True
-                trade_risk_pct = 0.0
-                risk_budget = 0.0
-                lot_size = 0.0
-                lot_factor = 0.0
+        )
+        for tag in cap_tags:
+            if tag not in tags:
+                tags.append(tag)
+        if reject_l0:
+            tags = cap_tags or tags
+            decision_source = "REJECT_BY_L0"
+            is_reject = True
+            trade_risk_pct = 0.0
+            risk_budget = 0.0
+            lot_size = 0.0
+            lot_factor = 0.0
+        else:
+            trade_risk_pct = compute_trade_risk_pct(base_risk_pct, lot_factor)
 
     if not is_reject and lot_size > 0.0 and lot_factor > 0.0:
         account.commit_daily_risk(trade_risk_pct)
@@ -3084,7 +3084,24 @@ def _apply_trade_outcome(
     sync_invalid = False
     sync_flags: tuple[str, ...] = ()
 
-    if pending.setup_type == CSPA_SETUP_TYPE and isinstance(setup, CspaSetup):
+    from audit.live_exit_bt import resolve_bt_take_profit
+    from strategies.dbbs_exit import resolve_dbbs_l5_outcome, should_apply_dbbs_trailing_exit
+
+    effective_tp = resolve_bt_take_profit(
+        float(setup.entry_price),
+        float(setup.stop_loss),
+        float(setup.take_profit),
+        setup.direction,
+        setup_type=pending.setup_type,
+        setup=setup,
+    )
+
+    if should_apply_dbbs_trailing_exit(pending.setup_type, setup):
+        h1_df = resample_to_h1(pair_df) if bar_minutes != 60 else pair_df
+        shadow_result, shadow_profit_r, shadow_pips, holding = resolve_dbbs_l5_outcome(
+            setup, h1_df
+        )
+    elif pending.setup_type == CSPA_SETUP_TYPE and isinstance(setup, CspaSetup):
         pip = pip_size_for_pair(setup.pair)
         effective_tp = scale_cspa_take_profit(
             setup.entry_price,
@@ -3111,7 +3128,7 @@ def _apply_trade_outcome(
             setup.direction,
             setup.entry_price,
             setup.stop_loss,
-            setup.take_profit,
+            effective_tp,
             bar_minutes,
             force_close_at_timeout=pending.force_close_at_timeout,
             timeout_server_hour=pending.timeout_server_hour,
@@ -3131,6 +3148,8 @@ def _apply_trade_outcome(
     executed = (not pending.is_reject) and pending.lot_factor > 0
     equity_before = pending.equity_before
     outcome_tags = list(pending.tags)
+    gross_profit_r = 0.0
+    commission_usd = 0.0
     for flag in sync_flags if pending.setup_type != CSPA_SETUP_TYPE else ():
         if flag not in outcome_tags:
             outcome_tags.append(flag)
@@ -3145,8 +3164,9 @@ def _apply_trade_outcome(
             shadow_profit_r_out = shadow_profit_r
         elif shadow_result in ("WIN", "LOSS"):
             trade_result = shadow_result
-            profit_r = shadow_profit_r
+            gross_profit_r = shadow_profit_r
             profit_loss = shadow_pips
+            profit_r = gross_profit_r
             equity_after = account.equity + pending.risk_budget * profit_r
             account.equity = equity_after
             account.update_equity_high_water_mark()
@@ -3171,8 +3191,9 @@ def _apply_trade_outcome(
                 )
         elif shadow_result == "EXIT_AT_SESSION_END":
             trade_result = "WIN" if shadow_profit_r > 0 else "LOSS"
-            profit_r = shadow_profit_r
+            gross_profit_r = shadow_profit_r
             profit_loss = shadow_pips
+            profit_r = gross_profit_r
             equity_after = account.equity + pending.risk_budget * profit_r
             account.equity = equity_after
             account.update_equity_high_water_mark()
@@ -3239,6 +3260,8 @@ def _apply_trade_outcome(
         "trade_result": trade_result,
         "profit_loss": round(profit_loss, 2),
         "profit_r": round(profit_r, 2),
+        "gross_profit_r": round(gross_profit_r, 4),
+        "commission_usd": round(commission_usd, 4),
         "holding_time": holding,
         "shadow_result": shadow_result_out,
         "shadow_profit_r": shadow_profit_r_out,
@@ -4086,11 +4109,32 @@ def pending_to_trade_signal(pending: PendingEvaluation) -> dict[str, Any]:
     else:
         action = "HOLD"
 
+    tp_price = float(setup.take_profit)
+    tp_capped = False
+    tp_r_effective = 0.0
+    tp_tag = "default"
+    if action in ("BUY", "SELL"):
+        from audit.live_tp_cap import is_live_tp_cap_enabled, resolve_live_take_profit
+
+        if is_live_tp_cap_enabled():
+            tp_price, tp_r_effective, tp_capped, tp_tag = resolve_live_take_profit(
+                float(setup.entry_price),
+                float(setup.stop_loss),
+                tp_price,
+                setup.direction,
+                setup_type=pending.setup_type,
+                setup=setup,
+            )
+
     message = (
         f"{pending.decision_source} | score={pending.candidate_score:.1f} | "
         f"bayes={pending.bayes_probability:.2f} | htf={pending.htf_trend_direction} | "
         f"tags={','.join(pending.tags)}"
     )
+    if tp_capped:
+        message += f" | tp_cap={tp_r_effective:.2f}R"
+    elif tp_tag not in ("off", "default", "unchanged"):
+        message += f" | tp_live={tp_tag}"
     from strategies import STRATEGY_LETTER_BY_SETUP_TYPE
 
     strategy_letter = STRATEGY_LETTER_BY_SETUP_TYPE.get(pending.setup_type, "")
@@ -4099,7 +4143,7 @@ def pending_to_trade_signal(pending: PendingEvaluation) -> dict[str, Any]:
         "lot_size": float(pending.lot_size) if action in ("BUY", "SELL") else 0.0,
         "risk_budget": float(pending.risk_budget) if action in ("BUY", "SELL") else 0.0,
         "sl": float(round(setup.stop_loss, 5)),
-        "tp": float(round(setup.take_profit, 5)),
+        "tp": float(round(tp_price, 5)),
         "entry": float(round(setup.entry_price, 5)),
         "message": message,
         "setup_type": pending.setup_type,
@@ -4122,6 +4166,10 @@ def pending_to_trade_signal(pending: PendingEvaluation) -> dict[str, Any]:
         signal["timeout_server_hour"] = pending.timeout_server_hour
     if pending.setup_type == CSPA_SETUP_TYPE and isinstance(setup, CspaSetup):
         signal.update(build_cspa_exit_signal_fields(setup))
+    if pending.setup_type == DBBS_SETUP_TYPE and isinstance(setup, DbbsSetup):
+        from strategies.dbbs_exit import build_dbbs_exit_signal_fields
+
+        signal.update(build_dbbs_exit_signal_fields(setup))
     return signal
 
 

@@ -10,6 +10,7 @@ from pyramid_manager import PyramidManager
 from live_pyramid.config import (
     LIVE_PYRAMID_TRIGGER_R,
     resolve_live_max_pyramid_layers,
+    resolve_live_pyramid_trigger_r,
 )
 from live_pyramid.limit_order import PyramidLimitIntent
 
@@ -118,7 +119,7 @@ def create_live_pyramid_session(
         current_bar_index=entry_bar_index,
         base_ticket=base_ticket,
         position_tickets=[base_ticket],
-        trigger_r=trigger_r if trigger_r is not None else LIVE_PYRAMID_TRIGGER_R,
+        trigger_r=trigger_r if trigger_r is not None else resolve_live_pyramid_trigger_r(setup_type),
         kalman_velocity_at_entry=kalman_velocity_at_entry,
         ws_mode=ws_mode,
     )

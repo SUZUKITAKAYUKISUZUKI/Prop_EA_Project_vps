@@ -433,6 +433,15 @@ def empty_pyramid_result(
     )
 
 
+def _pyramid_be_trigger_r(setup_type: str | None = None) -> float:
+    try:
+        from live_pyramid.config import resolve_live_pyramid_trigger_r
+
+        return resolve_live_pyramid_trigger_r(setup_type)
+    except Exception:
+        return 1.0
+
+
 def pyramid_result_to_record_fields(result: PyramidTradeResult) -> dict[str, Any]:
     return {
         "pyramid_layers": result.pyramid_layers,
@@ -461,6 +470,7 @@ def simulate_pyramid_on_bars(
     timeout_server_hour: int = 0,
     entry_timestamp: pd.Timestamp | None = None,
     max_holding_bars: int = 48,
+    setup_type: str | None = None,
 ) -> PyramidTradeResult:
     """
     バー逐次シミュレーション（ルックアヘッドなし）。
@@ -533,7 +543,7 @@ def simulate_pyramid_on_bars(
 
         mgr.update_peak(high, low, close)
 
-        if mgr.portfolio_unrealized_r(close) >= 1.0 and not mgr._all_sl_at_breakeven():
+        if mgr.portfolio_unrealized_r(close) >= _pyramid_be_trigger_r(setup_type) and not mgr._all_sl_at_breakeven():
             mgr.move_all_sl_to_breakeven()
 
         can_add, _ = mgr.can_add_pyramid(close, daily_dd_remaining_percent)
@@ -607,4 +617,5 @@ def track_with_pyramid(
         entry_timestamp=kwargs.get("entry_timestamp"),
         max_holding_bars=kwargs.get("max_holding_bars", 48),
         max_pyramid_layers=resolve_max_pyramid_layers(setup_type),
+        setup_type=setup_type,
     )

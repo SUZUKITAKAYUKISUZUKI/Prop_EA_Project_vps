@@ -18,6 +18,7 @@ import pandas as pd
 os.environ.setdefault("PROFIT_CUSHION_ENABLED", "1")
 os.environ.setdefault("TWIN_BRAKE_ENABLED", "1")
 
+from audit.risk_manager import evaluate_fintokei_trade_fail_reason
 from audit.risk_manager import CHALLENGE_PROFIT_TARGET_PCT, STARTING_EQUITY
 from prop_audit_reporter import (
     DAILY_DD_LIMIT_PCT,
@@ -116,6 +117,7 @@ def simulate_two_phase_fintokei(
             daily_rem,
             "challenge",
         )
+        prev_equity = equity
         equity = _apply_trade_equity_fixed_base(
             equity,
             float(row.profit_r),
@@ -128,7 +130,18 @@ def simulate_two_phase_fintokei(
         max_dd = max(max_dd, total_dd)
         daily_dd = (daily_start - day_min) / daily_start * 100.0 if daily_start > 0 else 0.0
 
-        if daily_dd >= DAILY_DD_LIMIT_PCT or total_dd >= TOTAL_DD_LIMIT_PCT:
+        fail_reason = evaluate_fintokei_trade_fail_reason(
+            prev_equity,
+            float(row.profit_r),
+            lot,
+            "challenge",
+            phase_start,
+            daily_dd_pct=daily_dd,
+            total_dd_pct=total_dd,
+            daily_dd_limit_pct=DAILY_DD_LIMIT_PCT,
+            total_dd_limit_pct=TOTAL_DD_LIMIT_PCT,
+        )
+        if fail_reason is not None:
             return {"outcome": "fail", "total_days": None, "max_dd": max_dd}
 
         if equity >= target_equity:

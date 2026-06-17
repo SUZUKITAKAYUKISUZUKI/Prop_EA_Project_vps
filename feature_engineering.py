@@ -101,6 +101,17 @@ def _apply_trade_outcome(
                 setup.direction,
                 pending.cspa_tp_multiplier,
             )
+    else:
+        from audit.live_exit_bt import resolve_bt_take_profit
+
+        take_profit = resolve_bt_take_profit(
+            float(setup.entry_price),
+            float(setup.stop_loss),
+            float(take_profit),
+            setup.direction,
+            setup_type=pending.setup_type,
+            setup=setup,
+        )
     risk = abs(setup.entry_price - setup.stop_loss)
     atr_price = risk * pending.atr_ratio if pending.atr_ratio > 0 else risk * 0.5
     sim_lot = pending.final_lot_size if pending.final_lot_size > 0 else (

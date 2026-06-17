@@ -19,6 +19,7 @@ input bool   InpPyramidLiveEnabled    = true;        // Live Limit ピラミッ�
 
 #include "LiveSentinel.mqh"
 #include "CspaExitManager.mqh"
+#include "DbbsExitManager.mqh"
 #include "PyramidLiveManager.mqh"
 
 string g_correlated_symbol = "";
@@ -589,6 +590,15 @@ bool execute_trade(
          response_json
       );
 
+      DbbsExit_TryRegisterFromSignal(
+         pos_ticket,
+         symbol,
+         pos_dir,
+         fill_entry,
+         sl,
+         response_json
+      );
+
       if(InpPyramidLiveEnabled)
       {
          PyramidLive_RegisterAfterEntry(
@@ -805,6 +815,7 @@ void OnTick()
 {
    LiveSentinel_OnTick(InpMagic);
    CspaExit_ManageOpenPositions(InpMagic, PERIOD_M5);
+   DbbsExit_ManageOpenPositions(InpMagic);
 
    if(InpPyramidLiveEnabled)
    {

@@ -462,6 +462,163 @@ def cap_lot_factor_to_daily_exposure(
     return capped, True
 
 
+# --- Fintokei single-position loss limit (integrated lot_factor cap) ---
+FINTOKEI_SINGLE_POSITION_LOSS_LIMIT_PCT = float(
+    os.getenv("FINTOKEI_SINGLE_POSITION_LOSS_LIMIT_PCT", "3.0")
+)
+REASON_FINTOKEI_SINGLE_POSITION_CAP = "FINTOKEI_SINGLE_POSITION_CAP"
+
+
+def is_fintokei_single_position_rule_enabled() -> bool:
+    raw = os.getenv("FINTOKEI_SINGLE_POSITION_RULE_ENABLED", "1").strip().lower()
+    return raw not in ("0", "false", "off", "no", "disabled")
+
+
+def fintokei_single_position_loss_limit_pct() -> float:
+    return max(
+        0.0,
+        float(
+            os.getenv(
+                "FINTOKEI_SINGLE_POSITION_LOSS_LIMIT_PCT",
+                str(FINTOKEI_SINGLE_POSITION_LOSS_LIMIT_PCT),
+            )
+        ),
+    )
+
+
+def single_trade_loss_pct(
+    equity: float,
+    profit_r: float,
+    lot_factor: float,
+    profile: str,
+    phase_start_equity: float,
+) -> float:
+    if profit_r >= 0.0 or equity <= 0.0 or lot_factor <= 0.0:
+        return 0.0
+    base_risk = effective_base_risk_pct(profile, phase_start_equity, equity)
+    return abs(base_risk * lot_factor * profit_r) * 100.0
+
+
+def exceeds_fintokei_single_position_limit(
+    equity: float,
+    profit_r: float,
+    lot_factor: float,
+    profile: str,
+    phase_start_equity: float,
+    *,
+    limit_pct: float | None = None,
+) -> bool:
+    if not is_fintokei_single_position_rule_enabled():
+        return False
+    limit = fintokei_single_position_loss_limit_pct() if limit_pct is None else limit_pct
+    return single_trade_loss_pct(
+        equity, profit_r, lot_factor, profile, phase_start_equity
+    ) >= limit
+
+
+def cap_lot_factor_to_fintokei_single_position(
+    lot_factor: float,
+    base_risk_pct: float,
+    *,
+    max_loss_r: float = 1.0,
+    limit_pct: float | None = None,
+) -> tuple[float, bool]:
+    """Cap lot_factor so worst-case loss at max_loss_r stays under Fintokei 3% rule."""
+    if not is_fintokei_single_position_rule_enabled():
+        return lot_factor, False
+    if lot_factor <= 0.0 or base_risk_pct <= 0.0 or max_loss_r <= 0.0:
+        return lot_factor, False
+
+    limit = fintokei_single_position_loss_limit_pct() if limit_pct is None else limit_pct
+    max_allowed = (limit / 100.0) / (base_risk_pct * max_loss_r)
+    if lot_factor <= max_allowed:
+        return lot_factor, False
+    capped = round(max(0.0, max_allowed), 4)
+    if capped > 0.0:
+        capped = apply_lot_factor_floor(capped)
+    if capped > max_allowed:
+        capped = round(max_allowed, 4)
+    if capped < LOT_FACTOR_FLOOR:
+        return 0.0, True
+    return capped, True
+
+
+def evaluate_fintokei_trade_fail_reason(
+    equity: float,
+    profit_r: float,
+    lot_factor: float,
+    profile: str,
+    phase_start_equity: float,
+    *,
+    daily_dd_pct: float,
+    total_dd_pct: float,
+    daily_dd_limit_pct: float,
+    total_dd_limit_pct: float,
+) -> str | None:
+    if daily_dd_pct >= daily_dd_limit_pct:
+        return "daily_dd"
+    if total_dd_pct >= total_dd_limit_pct:
+        return "total_dd"
+    if exceeds_fintokei_single_position_limit(
+        equity, profit_r, lot_factor, profile, phase_start_equity
+    ):
+        return "single_position"
+    return None
+
+
+def finalize_lot_factor_for_execution(
+    lot_factor: float,
+    *,
+    base_risk_pct: float,
+    sl_distance: float,
+    equity: float,
+    daily_committed_risk_pct: float,
+    max_loss_r: float = 1.0,
+) -> tuple[float, float, float, list[str], bool]:
+    """
+    Apply regulatory lot_factor caps (daily exposure + Fintokei 3%) and recompute size.
+
+    Returns:
+        lot_factor, risk_budget, lot_size, reason_tags, reject_by_l0
+    """
+    tags: list[str] = []
+    if lot_factor <= 0.0 or base_risk_pct <= 0.0:
+        return 0.0, 0.0, 0.0, tags, False
+
+    trade_risk_pct = compute_trade_risk_pct(base_risk_pct, lot_factor)
+    if trade_risk_pct > 0.0:
+        remaining = MAX_DAILY_EXPOSURE_LIMIT_PCT - daily_committed_risk_pct
+        if remaining <= 0.0 or trade_risk_pct > remaining:
+            capped_lf, was_capped = cap_lot_factor_to_daily_exposure(
+                lot_factor,
+                base_risk_pct,
+                daily_committed_risk_pct,
+            )
+            if was_capped and capped_lf > 0.0:
+                lot_factor = apply_lot_factor_floor(capped_lf)
+                if "DAILY_EXPOSURE_CAPPED" not in tags:
+                    tags.append("DAILY_EXPOSURE_CAPPED")
+            else:
+                return 0.0, 0.0, 0.0, ["DAILY_EXPOSURE_LIMIT_EXCEEDED"], True
+
+    capped_lf, was_single_capped = cap_lot_factor_to_fintokei_single_position(
+        lot_factor,
+        base_risk_pct,
+        max_loss_r=max_loss_r,
+    )
+    if was_single_capped:
+        if capped_lf <= 0.0:
+            return 0.0, 0.0, 0.0, [REASON_FINTOKEI_SINGLE_POSITION_CAP], True
+        lot_factor = capped_lf
+        if REASON_FINTOKEI_SINGLE_POSITION_CAP not in tags:
+            tags.append(REASON_FINTOKEI_SINGLE_POSITION_CAP)
+
+    lot_factor = apply_lot_factor_floor(lot_factor)
+    risk_budget = round(equity * base_risk_pct * lot_factor, 2)
+    lot_size = lot_from_risk_budget(risk_budget, sl_distance, lot_factor)
+    return lot_factor, risk_budget, lot_size, tags, False
+
+
 def multiplier_candidate(score: float) -> float:
     if score >= 90:
         return 1.2

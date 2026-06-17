@@ -1,7 +1,7 @@
 # Prop EA — VPS 最小構成リポジトリ
 
 本フォルダは **開発リポジトリ (`Prop_EA_Project`) から同期される VPS 実運用用の最小セット** です。  
-マニフェスト: **`deploy/vps-min-manifest.json` v8**（A+B+C+D+E 本番）
+マニフェスト: **`deploy/vps-min-manifest.json` v12**（A+B+C+D+E 本番 + Live Phase 2 + Fintokei 3%）
 
 ## 本番ポートフォリオ A+B+C+D+E
 
@@ -14,21 +14,31 @@
 | **E** | `smrs` | **Statistical Mean Reversion Scalper**（略称 **SMRS**） | M1 | **AUDNZD, EURGBP, NZDUSD** |
 
 - Python Bridge は `STRATEGY_LETTER_BY_MODE` に登録された **A/B/C/D/E** を同一エクイティで順次評価します。
-- **E（Statistical Mean Reversion Scalper / 略称 SMRS）** — M1 + Phase 3 Bayes + Model A sizing。Live 執行は `strategies/smrs.py`（Bridge letter **E**）。既定値は `strategies/smrs_production.py` の `PRODUCTION_SPEC`。
-- **AUDNZD / EURGBP** は D と E で共有 — **setup_type 単位の L2**（同一戦略×シンボル最大1）で競合を回避。
+- **E（SMRS）** — M1 + Phase 3 Bayes + Model A sizing。既定値は `strategies/smrs_production.py` の `PRODUCTION_SPEC`。
+- **AUDNZD / EURGBP** は D と E で共有 — **setup_type 単位の L2** で競合を回避。
 - BT / WFT / 巨大 CSV / checkpoints は **含みません**（Bayes / DN Prop Gate 用モデル JSON のみ同梱）。
 
 同期手順: [`VPS_MIN_SYNC_GUIDE.md`](./VPS_MIN_SYNC_GUIDE.md)
 
-## 3y BT 基準（A+B+C+D+E, allocation OFF）
+## Live Phase 2 + Fintokei ルール（v12）
+
+| 機能 | モジュール | 設定 |
+|------|-----------|------|
+| TP cap 1.5R | `audit/live_tp_cap.py` | `LIVE_TP_CAP_ENABLED=1` |
+| DBBS H1 trail（**SL-first / -1R floor**） | `strategies/dbbs_exit.py` + `mt5/DbbsExitManager.mqh` | `DBBS_LIVE_TRAIL_ENABLED=1` |
+| Pyramid BE after TP | `live_pyramid/` | `LIVE_PYRAMID_BE_AFTER_TP=1` |
+| Fintokei **3% 単一ポジション** lot cap | `audit/risk_manager.py` (`finalize_lot_factor_for_execution`) | `FINTOKEI_SINGLE_POSITION_RULE_ENABLED=1` |
+
+## 3y BT 基準（Live Phase 2 + Fintokei commission, allocation OFF）
 
 | Metric | Value |
 |--------|------:|
-| Executed trades | 2,472 |
-| Total R (effective) | +1,120.84R |
-| PF | 3.127 |
-| Prop pass rate | 100.00% |
-| Avg pass days | 6.0 |
+| Executed trades | 2,409 |
+| Total R (effective) | +2,323.52R |
+| PF | 2.838 |
+| Prop pass rate | **100.00%** |
+| Avg pass days | 17.5 |
+| Worst window DD | 3.36% |
 | WFT positive windows | 100% |
 
 ## VPS 推奨 `.env`
@@ -44,29 +54,23 @@ DD_THROTTLING_ENABLED=1
 MUTUAL_EXCLUSION_ENABLED=1
 PYRAMID_ENABLED=1
 PYRAMID_LSFC=1
+LIVE_TP_CAP_ENABLED=1
+LIVE_TP_MAX_R=1.5
+DBBS_LIVE_TRAIL_ENABLED=1
+LIVE_PYRAMID_BE_AFTER_TP=1
+FINTOKEI_SINGLE_POSITION_RULE_ENABLED=1
+FINTOKEI_SINGLE_POSITION_LOSS_LIMIT_PCT=3.0
 PORTFOLIO_ALLOCATION_ENABLED=0
 DBBS_DEFENSE=1
 DBBS_BEAR_KILL_SWITCH=1
 DINAPOLI_DEFENSE=1
 DN_PROP_GATE=1
+CHALLENGE_BASE_RISK_PCT_MAX=0.006
 VAMR_DEFENSE=1
-VAMR_GEMINI_AUDIT=0
 SMRS_DEFENSE=1
 SMRS_GEMINI_AUDIT=0
-SMRS_LLM_AUDIT=0
-SMRS_L2_MIN_SCORE=0
 PYRAMID_SMRS=0
 ```
-
-**Profit Cushion ×0.65** は **A/B/C/D/E 全戦略共通** の L4.5 防御です。
-
-## Portfolio Strategy Allocation（任意 — 本番 OFF）
-
-| 変数 | 説明 |
-|------|------|
-| `PORTFOLIO_ALLOCATION_ENABLED=0` | **本番既定** — lot_factor にウェイトを掛けない |
-| `PORTFOLIO_ALLOCATION_ENABLED=1` | 最適化ウェイトを lot_factor に反映 |
-| `PORTFOLIO_STRATEGY_WEIGHTS_FILE` | `deploy/portfolio_allocation_weights.json`（参考値。再最適化推奨） |
 
 ## L2 — 戦略×シンボル 1 ポジション + ピラミッディング
 
@@ -77,55 +81,27 @@ PYRAMID_SMRS=0
 | **MT5 EA** | `open_positions[]` に `setup_type` / `strategy_letter` を送信 |
 | **Bridge JSON** | comment `PropEA_A` … `PropEA_E` → setup_type へマップ |
 
-`MUTUAL_EXCLUSION_MODE=daily` / `concurrent` は **廃止**。VPS `.env` から削除してください。
+**VPS 反映時:** `PropEA_Bridge.mq5` + `DbbsExitManager.mqh` を **再コンパイル・再アタッチ**（DBBS SL_R_FLOOR / letter E 対応）。
 
-**VPS 反映時:** `PropEA_Bridge.mq5` を **再コンパイル・再アタッチ**（letter E 対応版）。  
-Live 履歴は MT5 チャートから **ペア別に自動取得**（M5=1800本 / M1=7500本）— `live_buffer_config.py` と MQ5 `RequiredHistoryBars()` を同期。
+## 同梱ファイル（manifest v12 必須）
 
-## Live 履歴バッファ（7チャート運用）
+**B — DBBS（出口統合）**
 
-| チャート足 | MT5 取得本数 | Python 上限 | 用途 |
-|-----------|-------------|--------------|------|
-| M5 | 1800 | 2000 | DBBS / VAMR（H1≥120） |
-| M1 | 7500 | 8000 | SMRS + VAMR（M1→H1/M5） |
+- `strategies/dbbs.py` / `dbbs_common.py` / **`dbbs_exit.py`** / `dbbs_bear_kill_switch.py`
+- `mt5/DbbsExitManager.mqh` — H1 BB trail + **-1R floor**
 
-初回リクエストでチャート過去足を一括シードし、以降は新バーごとに upsert します。
+**Live 防御（audit/）**
 
-## 同梱ファイル（manifest v8 必須）
+- `live_tp_cap.py` — TP cap / 構造 TP
+- `risk_manager.py` — **`finalize_lot_factor_for_execution`**（Fintokei 3% 含む）
+- `fintokei_rules.py` — 後方互換 re-export（任意）
 
-**A — LSFC**
-
-- `strategies/london_sweep_failure.py` / `lsfc_scan_hot.py` / `lsfc_scan_numba.py`
-
-**B — DBBS**
-
-- `strategies/dbbs.py` / `dbbs_common.py` / `dbbs_bear_kill_switch.py` / `scan_numba_util.py`
-
-**C — DiNapoli**
-
-- `strategies/dinapoli.py` / `dinapoli_mtf.py` / `dinapoli_feature_log.py` / `dinapoli_universe_fast.py`
-- `src/filters/dn_prop_gate_*.py` / `dn_bayes_ev_v2.py`
-- `backtest_results/models/dn_bayes_ev_v2.json` / `dn_prop_gate_v1.json`
-- `storage/dn_feature_store.py`
-
-**D — Volume Area Mean Reversion to POC（略称 VAMR）**
-
-- `strategies/vamr.py` / `vamr_bayes.py` / `vamr_features.py` / `vamr_phase2.py`
-- `strategies/var_reversal.py` / `var_detector.py`
-- `backtest_results/models/vamr_bayes_v1.json`
-
-**E — Statistical Mean Reversion Scalper（略称 SMRS）**
-
-- `strategies/smrs.py` / `smrs_pure.py` / `smrs_scan_numba.py` / `smrs_bayes.py` / `smrs_sizing.py` / `smrs_production.py`
-- `backtest_results/models/smrs_bayes_v1.json`
-- **除外（BT のみ）:** `smrs_portfolio.py`
+**A / C / D / E** — v11 同様（`deploy/VPS_MIN_SYNC_GUIDE.md` 参照）
 
 ## VPS 反映チェックリスト
 
-1. 開発 PC: `scripts\sync_vps_min.cmd` → manifest **v8** を確認
-2. VPS: `git pull` → `py -3 scripts\vps_bridge_smoke.py` が `[OK]`
-3. `.env` を `.env.example` どおりに設定（`PORTFOLIO_ALLOCATION_ENABLED=0`）
-4. MT5: `PropEA_Bridge.mq5` 再コンパイル（letter **E** 対応）
+1. 開発 PC: `scripts\sync_vps_min.cmd` → manifest **v12** を確認
+2. VPS: `git pull` → `py -3 scripts\vps_bridge_smoke.py` が `[OK]`（phase2 + 3% cap 行も OK）
+3. `.env` を `.env.example` どおりに設定
+4. MT5: **`PropEA_Bridge.mq5` 再コンパイル**（`DbbsExitManager.mqh` 更新含む）
 5. `start_mt5_bridge.bat` 再起動
-
-`.gitignore` は `storage/` 配下の実行時 DB を除外しますが、上記 Python モジュールは同期対象です。

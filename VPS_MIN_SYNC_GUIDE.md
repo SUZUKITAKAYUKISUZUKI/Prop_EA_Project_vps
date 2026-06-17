@@ -7,8 +7,9 @@
 | 開発 | `C:\Prop_EA_Project` | 全量（BT 結果は .gitignore 推奨） |
 | VPS 最小 | `C:\Prop_EA_Project_vps` | **GitHub 用リポジトリ**（軽量） |
 
-**本番ポートフォリオ:** A+B+C+D+E（LSFC + DBBS + DiNapoli + VAMR + Statistical Mean Reversion Scalper / SMRS Model A）  
-**マニフェスト:** `deploy/vps-min-manifest.json` **v8**
+**本番ポートフォリオ:** A+B+C+D+E（LSFC + DBBS + DiNapoli + VAMR + SMRS Model A）  
+**マニフェスト:** `deploy/vps-min-manifest.json` **v12**  
+**Live Phase 2:** TP cap 1.5R / DBBS H1 trail（SL-first, -1R floor）/ pyramid BE / Fintokei 3% single-position lot cap
 
 ---
 
@@ -36,15 +37,16 @@ Set-ExecutionPolicy -Scope CurrentUser RemoteSigned
 ### ステップ 1 — 最小構成をコピー
 
 1. `C:\Prop_EA_Project\scripts\sync_vps_min.cmd` を **ダブルクリック**
-2. 先頭に `Manifest: deploy/vps-min-manifest.json v8` と表示されることを確認
+2. 先頭に `Manifest: deploy/vps-min-manifest.json v12` と表示されることを確認
 3. `[copied]` が並び、`=== Sync complete ===` まで待つ
 
 **確認:** `C:\Prop_EA_Project_vps` に以下があること
 
 - `main_platform.py`
+- `strategies/dbbs_exit.py`
+- `audit/live_tp_cap.py`
+- `mt5/DbbsExitManager.mqh`
 - `backtest_results/models/smrs_bayes_v1.json`
-- `backtest_results/models/vamr_bayes_v1.json`
-- `strategies/smrs_production.py`
 - `deploy/portfolio_allocation_weights.json`
 
 ---
@@ -62,7 +64,7 @@ Set-ExecutionPolicy -Scope CurrentUser RemoteSigned
 cd C:\Prop_EA_Project_vps
 git init
 git add .
-git commit -m "Initial VPS minimum deploy (manifest v8, ABCDE)"
+git commit -m "Initial VPS minimum deploy (manifest v12, ABCDE Live Phase2)"
 git branch -M main
 git remote add origin https://github.com/USER/Prop_EA_Project_vps.git
 git push -u origin main
@@ -108,7 +110,7 @@ copy .env.example .env
 notepad .env
 ```
 
-### `.env` 必須設定（A+B+C+D+E）
+### `.env` 必須設定（A+B+C+D+E + Live Phase 2）
 
 `deploy/.env.example` を参照。最低限:
 
@@ -117,11 +119,13 @@ notepad .env
 | API | `GEMINI_API_KEY` |
 | 共通防御 | `PROFIT_CUSHION_ENABLED=1` / `PROFIT_CUSHION_LOT_MULT=0.65` / `TWIN_BRAKE_ENABLED=1` / `DD_THROTTLING_ENABLED=1` |
 | L2 | `MUTUAL_EXCLUSION_ENABLED=1` / `PYRAMID_ENABLED=1` / `PYRAMID_LSFC=1` |
+| Live Phase 2 | `LIVE_TP_CAP_ENABLED=1` / `LIVE_TP_MAX_R=1.5` / `DBBS_LIVE_TRAIL_ENABLED=1` / `LIVE_PYRAMID_BE_AFTER_TP=1` |
+| Fintokei 3% | **`FINTOKEI_SINGLE_POSITION_RULE_ENABLED=1`** / `FINTOKEI_SINGLE_POSITION_LOSS_LIMIT_PCT=3.0` |
 | 配分 | **`PORTFOLIO_ALLOCATION_ENABLED=0`**（本番既定） |
 | B DBBS | `DBBS_DEFENSE=1` / `DBBS_BEAR_KILL_SWITCH=1` |
-| C DiNapoli | `DINAPOLI_DEFENSE=1` / `DN_PROP_GATE=1` |
-| D Volume Area Mean Reversion to POC (VAMR) | `VAMR_DEFENSE=1` / `VAMR_GEMINI_AUDIT=0` |
-| E Statistical Mean Reversion Scalper (SMRS) | `SMRS_DEFENSE=1` / `SMRS_GEMINI_AUDIT=0` / `SMRS_LLM_AUDIT=0` / `SMRS_L2_MIN_SCORE=0` / `PYRAMID_SMRS=0` |
+| C DiNapoli | `DINAPOLI_DEFENSE=1` / `DN_PROP_GATE=1` / `CHALLENGE_BASE_RISK_PCT_MAX=0.006` |
+| D VAMR | `VAMR_DEFENSE=1` / `VAMR_GEMINI_AUDIT=0` |
+| E SMRS | `SMRS_DEFENSE=1` / `SMRS_GEMINI_AUDIT=0` / `PYRAMID_SMRS=0` |
 
 > **`MUTUAL_EXCLUSION_MODE=daily` があれば削除**（廃止済み）。
 
@@ -134,53 +138,41 @@ py -3 scripts\vps_bridge_smoke.py
 
 | 結果 | 意味 |
 |------|------|
-| `[OK] VPS minimum files present (A+B+C+D+E)` | manifest v8 同期 OK |
+| `[OK] VPS minimum files present (A+B+C+D+E)` | manifest v12 同期 OK |
 | `[OK] Strategy registry (letter E / abcde expansion)` | Python レジストリ OK |
+| `[OK] Live phase2 exits + Fintokei 3% lot cap` | DBBS exit / lot_factor 統合 OK |
 | `[OK] evaluate_trade_signal` | Bridge 評価パス OK |
 | `[FAIL] Missing ...` | 開発 PC で `sync_vps_min.cmd` を再実行 → push → pull |
 
 ### MT5 / Bridge 再起動
 
-1. MT5 で **`PropEA_Bridge.mq5` を再コンパイル・再アタッチ**（letter **E** = SMRS 対応）
+1. MT5 で **`PropEA_Bridge.mq5` を再コンパイル・再アタッチ**（`DbbsExitManager.mqh` v12 = SL_R_FLOOR）
 2. `start_mt5_bridge.bat` をダブルクリック（再起動）
 
 ---
 
-## L2 — 戦略×シンボル 1 ポジション（A+B+C+D+E）
+## manifest v12 追加・更新モジュール
 
-| 層 | 役割 |
-|---|---|
-| Python | `one_per_strategy_symbol` — 各戦略×シンボル最大1 |
-| ピラミッディング | 有効戦略は L2 自動 OFF（既定: LSFC のみ ON） |
-| MT5 EA | `open_positions[]` に `setup_type` / `strategy_letter` (A–E) |
-| 共有ペア | AUDNZD / EURGBP は **D (VAMR)** と **E (SMRS)** で別 setup_type — L2 は戦略単位 |
-
----
-
-## manifest v8 同梱一覧
+| モジュール | 用途 |
+|-----------|------|
+| `strategies/dbbs_exit.py` | DBBS H1 trail / Live JSON / BT L5 出口 |
+| `audit/live_tp_cap.py` | Live TP cap 1.5R + 構造 TP |
+| `audit/risk_manager.py` | `finalize_lot_factor_for_execution`（Fintokei 3%） |
+| `mt5/DbbsExitManager.mqh` | Live DBBS trail + **-1R floor** |
 
 ### モデル JSON（`backtest_results/models/`）
 
 | ファイル | 用途 |
 |----------|------|
 | `dn_bayes_ev_v2.json` / `dn_prop_gate_v1.json` | Strategy C |
-| `vamr_bayes_v1.json` | Strategy D — Volume Area Mean Reversion to POC (VAMR) |
-| `smrs_bayes_v1.json` | Strategy E — Statistical Mean Reversion Scalper (SMRS) |
-
-### 戦略 Python（抜粋）
-
-| Letter | 必須モジュール |
-|--------|----------------|
-| A | `london_sweep_failure.py`, `lsfc_scan_hot.py` |
-| B | `dbbs.py`, `dbbs_common.py`, `dbbs_bear_kill_switch.py`, `scan_numba_util.py` |
-| C | `dinapoli.py`, `dinapoli_mtf.py`, `dinapoli_universe_fast.py`, `src/filters/dn_prop_gate_*` |
-| D | `vamr.py`, `vamr_bayes.py`, `vamr_features.py`, `vamr_phase2.py`, `var_reversal.py`, `var_detector.py` |
-| E | `smrs.py`, `smrs_pure.py`, `smrs_scan_numba.py`, `smrs_bayes.py`, `smrs_sizing.py`, `smrs_production.py` |
+| `vamr_bayes_v1.json` | Strategy D |
+| `smrs_bayes_v1.json` | Strategy E |
 
 ### 意図的に除外（BT のみ — VPS 不要）
 
 - `strategies/smrs_portfolio.py`
 - `strategies/bt_l5*.py`, `bt_scan_parallel.py`
+- `audit/live_exit_bt.py`（BT 専用 — Live 不要）
 
 ---
 
@@ -204,7 +196,8 @@ py -3 scripts\vps_bridge_smoke.py
 | push が大きすぎる | `backtest_results/` CSV が混入していないか確認 → `-Clean` |
 | VPS で import エラー | `pip install -r requirements.txt` → smoke test |
 | MT5 → `/trade_signal` **500** | 下記参照 |
-| letter E が MT5 comment に出ない | `PropEA_Bridge.mq5` を v8 版で再コンパイル |
+| DBBS が旧 Fixed SL/TP のまま | `dbbs_exit.py` + `DbbsExitManager.mqh` 同期 → **再コンパイル** |
+| manifest v11 未満 | `dbbs_exit.py` / Fintokei 3% cap 欠落 → v12 同期 |
 
 ---
 
@@ -219,18 +212,12 @@ py -3 scripts\vps_bridge_smoke.py
 
 ### 手順 2 — よくある原因: 古い最小構成
 
-manifest **v8 未満** では VAMR / SMRS モデルや `vamr_phase2.py` が欠け、import エラー → **500** になります。
+manifest **v12 未満** では `dbbs_exit.py` / `live_tp_cap.py` / 更新 `risk_manager.py` が欠け、import エラー → **500** になります。
 
-1. 開発 PC で `sync_vps_min.cmd`（v8 表示を確認）
+1. 開発 PC で `sync_vps_min.cmd`（**v12** 表示を確認）
 2. VPS で `git pull`
-3. `.env` を A+B+C+D+E 本番に合わせる
-4. smoke test → bridge 再起動
-
-### 手順 3 — 500 本文を確認（任意）
-
-```powershell
-Invoke-RestMethod -Method Post -Uri http://127.0.0.1:8000/trade_signal -ContentType "application/json" -Body '{"market":{"pair":"GBPUSD","open":1.27,"high":1.271,"low":1.269,"close":1.27,"volume":100},"calendar":{"minutes_to_next_news":45,"news_impact_level":"HIGH"},"account":{"equity":100000,"balance":100000},"bar_time":"2026-06-01 12:00:00","server_time":"2026-06-01 12:00:00","spread_points":10}'
-```
+3. `.env` を Live Phase 2 + Fintokei 3% 含む本番設定に合わせる
+4. smoke test → MT5 再コンパイル → bridge 再起動
 
 ---
 
@@ -244,7 +231,7 @@ cd C:\Prop_EA_Project
 # ② 最小 → GitHub
 cd C:\Prop_EA_Project_vps
 git add -u; git add .
-git commit -m "Sync from dev (manifest v8 ABCDE)"
+git commit -m "Sync from dev (manifest v12 ABCDE Live Phase2)"
 git push origin main
 
 # ③ VPS で取得 & 検証

@@ -47,6 +47,7 @@ def main() -> None:
         ROOT / "strategies" / "london_sweep_failure.py",
         ROOT / "strategies" / "dbbs.py",
         ROOT / "strategies" / "dbbs_common.py",
+        ROOT / "strategies" / "dbbs_exit.py",
         ROOT / "strategies" / "dbbs_bear_kill_switch.py",
         ROOT / "strategies" / "scan_numba_util.py",
         ROOT / "strategies" / "dinapoli.py",
@@ -70,6 +71,8 @@ def main() -> None:
         ROOT / "strategies" / "smrs_sizing.py",
         ROOT / "strategies" / "smrs_production.py",
         ROOT / "backtest_results" / "models" / "smrs_bayes_v1.json",
+        ROOT / "audit" / "live_tp_cap.py",
+        ROOT / "mt5" / "DbbsExitManager.mqh",
         ROOT / "mt5" / "PropEA_Bridge.mq5",
         ROOT / "deploy" / "portfolio_allocation_weights.json",
     ]
@@ -79,7 +82,7 @@ def main() -> None:
     missing = [p for p in required if not p.is_file()]
     if missing:
         _fail(
-            "Missing VPS minimum files (manifest v8 / A+B+C+D+E):\n  "
+            "Missing VPS minimum files (manifest v12 / A+B+C+D+E):\n  "
             + "\n  ".join(str(p.relative_to(ROOT)) for p in missing)
             + "\nRe-sync from dev (sync_vps_min.cmd) or git pull the latest VPS repo."
         )
@@ -115,6 +118,37 @@ def main() -> None:
         traceback.print_exc()
         _fail(str(exc))
     print("[OK] Strategy registry (letter E / abcde expansion)")
+
+    try:
+        from audit.risk_manager import (
+            finalize_lot_factor_for_execution,
+            is_fintokei_single_position_rule_enabled,
+        )
+        from strategies.dbbs_common import DBBS_MAX_LOSS_R
+        from strategies.dbbs_exit import build_dbbs_exit_signal_fields, is_dbbs_live_trail_enabled
+
+        assert DBBS_MAX_LOSS_R == 1.0
+        if is_dbbs_live_trail_enabled():
+            fields = build_dbbs_exit_signal_fields()
+            assert fields.get("exit_mode") == "DBBS_TRAIL"
+            assert fields.get("exit_max_loss_r") == 1.0
+        lf, _rb, _ls, _tags, reject = finalize_lot_factor_for_execution(
+            6.0,
+            base_risk_pct=0.006,
+            sl_distance=0.0020,
+            equity=100_000.0,
+            daily_committed_risk_pct=0.0,
+            max_loss_r=1.0,
+        )
+        assert reject is False
+        assert lf > 0.0
+        if is_fintokei_single_position_rule_enabled():
+            assert lf <= 5.0
+    except Exception as exc:
+        print("[FAIL] live exit / lot_factor cap check:")
+        traceback.print_exc()
+        _fail(str(exc))
+    print("[OK] Live phase2 exits + Fintokei 3% lot cap")
 
     try:
         import pandas as pd

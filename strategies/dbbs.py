@@ -44,6 +44,8 @@ from strategies.dbbs_common import (
 
     SQUEEZE_MIN_HOLD_H1,
 
+    DBBS_MAX_LOSS_R,
+
     STRATEGY_ABBREV,
 
     STRATEGY_FULL_NAME,
@@ -408,7 +410,7 @@ def evaluate_squeeze_trailing_exit(
 
     if risk <= 0.0 or not is_valid_stop_side(setup.direction, entry, setup.stop_loss):
 
-        return "LOSS", -1.0, 0
+        return "LOSS", -DBBS_MAX_LOSS_R, 0
 
 
 
@@ -432,13 +434,22 @@ def evaluate_squeeze_trailing_exit(
 
         lower1 = mid - std
 
+        if setup.direction == "BUY" and close_j <= setup.stop_loss:
+            return "LOSS", -DBBS_MAX_LOSS_R, held
+
+        if setup.direction == "SELL" and close_j >= setup.stop_loss:
+            return "LOSS", -DBBS_MAX_LOSS_R, held
+
         if setup.direction == "BUY" and close_j < upper1:
 
             pnl = close_j - entry
 
             label = "WIN" if pnl > 0 else "LOSS"
 
-            return label, clamp_result_r(pnl / risk), held
+            result_r = clamp_result_r(pnl / risk)
+            if result_r < -DBBS_MAX_LOSS_R:
+                result_r = -DBBS_MAX_LOSS_R
+            return label, result_r, held
 
         if setup.direction == "SELL" and close_j > lower1:
 
@@ -446,17 +457,12 @@ def evaluate_squeeze_trailing_exit(
 
             label = "WIN" if pnl > 0 else "LOSS"
 
-            return label, clamp_result_r(pnl / risk), held
+            result_r = clamp_result_r(pnl / risk)
+            if result_r < -DBBS_MAX_LOSS_R:
+                result_r = -DBBS_MAX_LOSS_R
+            return label, result_r, held
 
-        if setup.direction == "BUY" and close_j <= setup.stop_loss:
-
-            return "LOSS", -1.0, held
-
-        if setup.direction == "SELL" and close_j >= setup.stop_loss:
-
-            return "LOSS", -1.0, held
-
-    return "LOSS", -1.0, min(SQUEEZE_MAX_HOLD_H1, end - start_h1_index - 1)
+    return "LOSS", -DBBS_MAX_LOSS_R, min(SQUEEZE_MAX_HOLD_H1, end - start_h1_index - 1)
 
 
 
