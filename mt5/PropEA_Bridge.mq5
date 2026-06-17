@@ -4,7 +4,7 @@
 //| MT5: ツール→オプション→エキスパートアドバイザー→WebRequest許可URL |
 //+------------------------------------------------------------------+
 #property copyright "Prop EA Project"
-#property version   "1.00"
+#property version   "1.02"
 
 input string InpApiUrl              = "http://127.0.0.1:8000/trade_signal";
 input int    InpTimerSeconds        = 60;          // シグナル照会間隔（秒）
@@ -431,28 +431,24 @@ bool ExtractJsonDouble(const string json, const string key, double &value)
 //+------------------------------------------------------------------+
 bool BridgeHealthCheck()
 {
-   for(int attempt = 0; attempt < 8; attempt++)
-   {
-      if(!PropEA_TryAcquireWebRequestLock())
-      {
-         Sleep(300);
-         continue;
-      }
-
-      char post[];
-      char result[];
-      string result_headers;
-      ArrayResize(post, 0);
-      string headers = "Content-Type: application/json\r\n";
-      string url = BridgeHealthUrl();
-      int status = WebRequest("GET", url, headers, 5000, post, result, result_headers);
-      PropEA_ReleaseWebRequestLock();
-      if(status == 200)
-         return true;
-      Print("Bridge health check failed. ", WebRequestStatusHint(status, GetLastError()),
-            " url=", url);
+   if(GlobalVariableCheck(PROPEA_WR_OWNER_GV))
       return false;
-   }
+
+   if(!PropEA_TryAcquireWebRequestLock())
+      return false;
+
+   char post[];
+   char result[];
+   string result_headers;
+   ArrayResize(post, 0);
+   string headers = "Content-Type: application/json\r\n";
+   string url = BridgeHealthUrl();
+   int status = WebRequest("GET", url, headers, 5000, post, result, result_headers);
+   PropEA_ReleaseWebRequestLock();
+   if(status == 200)
+      return true;
+   Print("Bridge health check failed. ", WebRequestStatusHint(status, GetLastError()),
+         " url=", url);
    return false;
 }
 
@@ -460,19 +456,12 @@ bool BridgeHealthCheck()
 bool PostTradeSignal(const string body, string &response)
 {
    int timeout_ms = WebRequestTimeoutMs(_Symbol);
-   int turn_wait_ms = PropEA_ComputeFleetTurnWaitMs(timeout_ms);
    int my_slot = PropEA_RequestSlotIndex(_Symbol);
-   if(!PropEA_WaitForRequestTurn(_Symbol, turn_wait_ms, timeout_ms))
+   if(!PropEA_BeginWebRequestSession(_Symbol, timeout_ms, my_slot))
    {
-      Print("PostTradeSignal deferred — fleet turn queue timeout (", turn_wait_ms,
-            "ms) slot=", my_slot, " symbol=", _Symbol);
-      return false;
-   }
-
-   if(!PropEA_WaitAcquireWebRequestLock(15000))
-   {
-      Print("PostTradeSignal deferred — WebRequest lock busy slot=", my_slot, " symbol=", _Symbol);
-      PropEA_AdvanceRequestTurn(_Symbol);
+      int turn_wait_ms = PropEA_ComputeFleetTurnWaitMs(timeout_ms);
+      Print("PostTradeSignal deferred — fleet/lock session unavailable (turn_wait=",
+            turn_wait_ms, "ms) slot=", my_slot, " symbol=", _Symbol);
       return false;
    }
 
@@ -504,8 +493,7 @@ bool PostTradeSignal(const string body, string &response)
       }
       break;
    }
-   PropEA_ReleaseWebRequestLock();
-   PropEA_AdvanceRequestTurn(_Symbol);
+   PropEA_EndWebRequestSession(_Symbol);
 
    if(status == -1)
    {
@@ -902,7 +890,7 @@ int OnInit()
    if(init_stagger_ms > 0)
       Sleep(init_stagger_ms);
    EventSetTimer(InpTimerSeconds);
-   Print("PropEA_Bridge initialized. API=", InpApiUrl, " corr=", g_correlated_symbol,
+   Print("PropEA_Bridge v1.02 initialized. API=", InpApiUrl, " corr=", g_correlated_symbol,
          " tf=", EnumToString(BarTimeframeForSymbol(_Symbol)),
          " history=", EffectiveHistoryBars(_Symbol),
          " max_spread=", MaxSpreadForSymbol(_Symbol),
