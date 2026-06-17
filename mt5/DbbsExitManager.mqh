@@ -5,6 +5,7 @@
 #define DBBS_EXIT_MANAGER_MQH
 
 #define DBBS_EXIT_MAX_TRACKS 16
+#define DBBS_BB_CACHE_MAX   8
 
 struct DbbsExitTrack
 {
@@ -21,6 +22,88 @@ struct DbbsExitTrack
 };
 
 DbbsExitTrack g_dbbs_tracks[DBBS_EXIT_MAX_TRACKS];
+
+struct DbbsBbCacheEntry
+{
+   string symbol;
+   int    handle;
+};
+
+DbbsBbCacheEntry g_dbbs_bb_cache[DBBS_BB_CACHE_MAX];
+datetime         g_dbbs_last_h1_bar_time[DBBS_BB_CACHE_MAX];
+
+//+------------------------------------------------------------------+
+int DbbsExit_FindBbCacheIndex(const string symbol)
+{
+   for(int i = 0; i < DBBS_BB_CACHE_MAX; i++)
+   {
+      if(g_dbbs_bb_cache[i].symbol == symbol)
+         return i;
+   }
+   return -1;
+}
+
+//+------------------------------------------------------------------+
+int DbbsExit_AcquireBbCacheIndex(const string symbol)
+{
+   int idx = DbbsExit_FindBbCacheIndex(symbol);
+   if(idx >= 0)
+      return idx;
+
+   for(int i = 0; i < DBBS_BB_CACHE_MAX; i++)
+   {
+      if(g_dbbs_bb_cache[i].symbol == "")
+      {
+         g_dbbs_bb_cache[i].symbol = symbol;
+         g_dbbs_bb_cache[i].handle = INVALID_HANDLE;
+         g_dbbs_last_h1_bar_time[i] = 0;
+         return i;
+      }
+   }
+   return -1;
+}
+
+//+------------------------------------------------------------------+
+int DbbsExit_GetBandsHandle(const string symbol)
+{
+   int idx = DbbsExit_AcquireBbCacheIndex(symbol);
+   if(idx < 0)
+      return INVALID_HANDLE;
+
+   if(g_dbbs_bb_cache[idx].handle == INVALID_HANDLE)
+   {
+      g_dbbs_bb_cache[idx].handle = iBands(symbol, PERIOD_H1, 20, 0, 2.0, PRICE_CLOSE);
+      if(g_dbbs_bb_cache[idx].handle == INVALID_HANDLE)
+         Print("DbbsExit: iBands create failed symbol=", symbol, " err=", GetLastError());
+   }
+   return g_dbbs_bb_cache[idx].handle;
+}
+
+//+------------------------------------------------------------------+
+void DbbsExit_Deinit()
+{
+   for(int i = 0; i < DBBS_BB_CACHE_MAX; i++)
+   {
+      if(g_dbbs_bb_cache[i].handle != INVALID_HANDLE)
+      {
+         IndicatorRelease(g_dbbs_bb_cache[i].handle);
+         g_dbbs_bb_cache[i].handle = INVALID_HANDLE;
+      }
+      g_dbbs_bb_cache[i].symbol = "";
+      g_dbbs_last_h1_bar_time[i] = 0;
+   }
+}
+
+//+------------------------------------------------------------------+
+bool DbbsExit_SymbolHasActiveTrack(const string symbol)
+{
+   for(int i = 0; i < DBBS_EXIT_MAX_TRACKS; i++)
+   {
+      if(g_dbbs_tracks[i].active && g_dbbs_tracks[i].symbol == symbol)
+         return true;
+   }
+   return false;
+}
 
 //+------------------------------------------------------------------+
 int DbbsExit_FindSlot()
@@ -105,7 +188,7 @@ bool DbbsExit_Bb20Upper1Sigma(
    double &close_h1
 )
 {
-   int handle = iBands(symbol, PERIOD_H1, 20, 0, 2.0, PRICE_CLOSE);
+   int handle = DbbsExit_GetBandsHandle(symbol);
    if(handle == INVALID_HANDLE)
       return false;
 
@@ -115,20 +198,11 @@ bool DbbsExit_Bb20Upper1Sigma(
    ArraySetAsSeries(lower, true);
 
    if(CopyBuffer(handle, 0, bar_shift, 1, upper) != 1)
-   {
-      IndicatorRelease(handle);
       return false;
-   }
    if(CopyBuffer(handle, 1, bar_shift, 1, middle) != 1)
-   {
-      IndicatorRelease(handle);
       return false;
-   }
    if(CopyBuffer(handle, 2, bar_shift, 1, lower) != 1)
-   {
-      IndicatorRelease(handle);
       return false;
-   }
 
    double sigma = (upper[0] - middle[0]) / 2.0;
    upper1 = middle[0] + sigma;
@@ -137,12 +211,8 @@ bool DbbsExit_Bb20Upper1Sigma(
    MqlRates rates[];
    ArraySetAsSeries(rates, true);
    if(CopyRates(symbol, PERIOD_H1, bar_shift, 1, rates) != 1)
-   {
-      IndicatorRelease(handle);
       return false;
-   }
    close_h1 = rates[0].close;
-   IndicatorRelease(handle);
    return true;
 }
 
@@ -318,15 +388,25 @@ void DbbsExit_PurgeClosed()
 //+------------------------------------------------------------------+
 void DbbsExit_OnNewH1Bar(const string symbol)
 {
+   if(!DbbsExit_SymbolHasActiveTrack(symbol))
+      return;
+
    MqlRates rates[];
    ArraySetAsSeries(rates, true);
    if(CopyRates(symbol, PERIOD_H1, 1, 1, rates) != 1)
       return;
 
    datetime bar_time = rates[0].time;
+   int cache_idx = DbbsExit_FindBbCacheIndex(symbol);
+   if(cache_idx >= 0 && g_dbbs_last_h1_bar_time[cache_idx] == bar_time)
+      return;
+
    double upper1 = 0.0, lower1 = 0.0, close_h1 = rates[0].close;
    if(!DbbsExit_Bb20Upper1Sigma(symbol, 1, upper1, lower1, close_h1))
       return;
+
+   if(cache_idx >= 0)
+      g_dbbs_last_h1_bar_time[cache_idx] = bar_time;
 
    for(int i = 0; i < DBBS_EXIT_MAX_TRACKS; i++)
    {
@@ -347,6 +427,9 @@ void DbbsExit_ManageOpenPositions(const ulong magic)
 {
    DbbsExit_PurgeClosed();
 
+   string symbols[DBBS_BB_CACHE_MAX];
+   int symbol_count = 0;
+
    for(int i = PositionsTotal() - 1; i >= 0; i--)
    {
       ulong ticket = PositionGetTicket(i);
@@ -358,8 +441,24 @@ void DbbsExit_ManageOpenPositions(const ulong magic)
          continue;
 
       string symbol = PositionGetString(POSITION_SYMBOL);
-      DbbsExit_OnNewH1Bar(symbol);
+      bool found = false;
+      for(int j = 0; j < symbol_count; j++)
+      {
+         if(symbols[j] == symbol)
+         {
+            found = true;
+            break;
+         }
+      }
+      if(!found && symbol_count < DBBS_BB_CACHE_MAX)
+      {
+         symbols[symbol_count] = symbol;
+         symbol_count++;
+      }
    }
+
+   for(int k = 0; k < symbol_count; k++)
+      DbbsExit_OnNewH1Bar(symbols[k]);
 }
 
 #endif // DBBS_EXIT_MANAGER_MQH

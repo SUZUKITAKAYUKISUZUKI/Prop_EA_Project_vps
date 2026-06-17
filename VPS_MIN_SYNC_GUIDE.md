@@ -197,7 +197,26 @@ py -3 scripts\vps_bridge_smoke.py
 | VPS で import エラー | `pip install -r requirements.txt` → smoke test |
 | MT5 → `/trade_signal` **500** | 下記参照 |
 | DBBS が旧 Fixed SL/TP のまま | `dbbs_exit.py` + `DbbsExitManager.mqh` 同期 → **再コンパイル** |
-| manifest v11 未満 | `dbbs_exit.py` / Fintokei 3% cap 欠落 → v12 同期 |
+| manifest v11 未満 | `dbbs_exit.py` / Fintokei 3% cap 欠落 → v12+ 同期 |
+| **EA がチャートから消える / Abnormal termination** | 下記「EA 自動削除」参照 |
+| HTTP 1001 / 1003 | Bridge 未起動 or WebRequest URL 未許可 |
+
+---
+
+## EA がチャートから自動削除される（Abnormal termination）
+
+MT5 は EA **クラッシュ時にチャートから EA を自動削除**します（「Abnormal termination」）。主因は次のとおりです。
+
+| ログ | 原因 | 対処 |
+|------|------|------|
+| `HTTP status=1003` | WebRequest 許可 URL 未設定 | MT5 → ツール → オプション → エキスパート → **http://127.0.0.1:8000** を追加 → MT5 再起動 |
+| `HTTP status=1001` | Python Bridge 停止 / 接続切断 | `start_mt5_bridge.bat` 再起動、`py -3 scripts\vps_bridge_smoke.py` |
+| `automated trading is disabled` | 自動売買 OFF | ツールバー「アルゴリズム取引」ボタン ON |
+| `Abnormal termination` | v12 以前: DbbsExit が毎 Tick で iBands 生成 | **manifest v13** + `DbbsExitManager.mqh` 同期 → **再コンパイル** |
+
+**v13 修正:** iBands ハンドルキャッシュ、シンボル単位 H1 処理、HTTP 失敗時バックオフ、`/health` 起動チェック。
+
+再アタッチ手順: Bridge 起動 → WebRequest 確認 → `PropEA_Bridge.ex5` 再コンパイル → 各チャートに再アタッチ → アルゴリズム取引 ON。
 
 ---
 
