@@ -26,6 +26,55 @@ string g_correlated_symbol = "";
 datetime g_last_bar_time   = 0;
 datetime g_last_request    = 0;
 int      g_http_fail_streak = 0;
+bool     g_autotrading_warned = false;
+
+//+------------------------------------------------------------------+
+void PropEA_CheckAutoTrading()
+{
+   if(TerminalInfoInteger(TERMINAL_TRADE_ALLOWED) && MQLInfoInteger(MQL_TRADE_ALLOWED))
+   {
+      g_autotrading_warned = false;
+      return;
+   }
+   if(g_autotrading_warned)
+      return;
+   Print(
+      "PropEA_Bridge: AutoTrading is OFF — EA remains on chart but is paused. ",
+      "Click the Algo Trading button in MT5 to resume."
+   );
+   g_autotrading_warned = true;
+}
+
+//+------------------------------------------------------------------+
+void PropEA_HandleExternalClose(const ulong deal)
+{
+   if(deal == 0 || !HistoryDealSelect(deal))
+      return;
+
+   long magic = HistoryDealGetInteger(deal, DEAL_MAGIC);
+   if(magic != (long)InpMagic)
+      return;
+
+   long entry = HistoryDealGetInteger(deal, DEAL_ENTRY);
+   if(entry != DEAL_ENTRY_OUT && entry != DEAL_ENTRY_OUT_BY)
+      return;
+
+   string symbol = HistoryDealGetString(deal, DEAL_SYMBOL);
+   ulong position_id = (ulong)HistoryDealGetInteger(deal, DEAL_POSITION_ID);
+   long reason = HistoryDealGetInteger(deal, DEAL_REASON);
+
+   Print(
+      "PropEA_Bridge external close symbol=", symbol,
+      " position_id=", position_id,
+      " reason=", reason,
+      " — EA stays attached; syncing local exit state"
+   );
+
+   CspaExit_PurgeByPosition(position_id);
+   DbbsExit_PurgeByPosition(position_id);
+   if(InpPyramidLiveEnabled)
+      PyramidLive_QueueCloseForPosition(position_id, symbol, InpMagic);
+}
 
 //+------------------------------------------------------------------+
 string BridgeHealthUrl()
@@ -873,18 +922,22 @@ void OnDeinit(const int reason)
       case REASON_PROGRAM:     why = "ExpertRemove()"; break;
       case REASON_CLOSE:       why = "terminal closed"; break;
    }
-   Print("PropEA_Bridge deinit: ", why);
+   Print("PropEA_Bridge deinit: ", why, " chart=", _Symbol);
+   Comment("PropEA_Bridge stopped: ", why);
 }
 
 //+------------------------------------------------------------------+
 void OnTimer()
 {
+   if(InpPyramidLiveEnabled)
+      PyramidLive_ProcessPendingCloses(InpMagic);
    RequestPipelineSignal();
 }
 
 //+------------------------------------------------------------------+
 void OnTick()
 {
+   PropEA_CheckAutoTrading();
    LiveSentinel_OnTick(InpMagic);
    CspaExit_ManageOpenPositions(InpMagic, PERIOD_M5);
    DbbsExit_ManageOpenPositions(InpMagic);
@@ -910,8 +963,11 @@ void OnTradeTransaction(
    const MqlTradeResult &result
 )
 {
+   if(trans.type == TRADE_TRANSACTION_DEAL_ADD && trans.deal != 0)
+      PropEA_HandleExternalClose(trans.deal);
+
    if(InpPyramidLiveEnabled)
-      PyramidLive_OnTradeTransaction(trans, request, result);
+      PyramidLive_OnTradeTransaction(trans, request, result, InpMagic);
 }
 
 //+------------------------------------------------------------------+

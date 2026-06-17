@@ -10,6 +10,7 @@
 struct PyramidLiveTrack
 {
    bool     active;
+   bool     close_pending;
    string   trade_id;
    string   pyramid_group_id;
    string   setup_type;
@@ -115,6 +116,7 @@ int PyramidLive_FindByGroupId(const string group_id)
 void PyramidLive_ClearSlot(const int idx)
 {
    g_pyramid_tracks[idx].active = false;
+   g_pyramid_tracks[idx].close_pending = false;
    g_pyramid_tracks[idx].trade_id = "";
    g_pyramid_tracks[idx].pyramid_group_id = "";
    g_pyramid_tracks[idx].pending_order_ticket = 0;
@@ -632,6 +634,7 @@ bool PyramidLive_RegisterAfterEntry(
    }
 
    g_pyramid_tracks[slot].active = true;
+   g_pyramid_tracks[slot].close_pending = false;
    g_pyramid_tracks[slot].trade_id = trade_id;
    g_pyramid_tracks[slot].pyramid_group_id = group_id;
    g_pyramid_tracks[slot].setup_type = setup_type;
@@ -700,7 +703,8 @@ void PyramidLive_NotifyFill(
    const int track_idx,
    const double fill_price,
    const ulong position_ticket,
-   const ulong order_ticket
+   const ulong order_ticket,
+   const ulong magic
 )
 {
    if(track_idx < 0 || !g_pyramid_tracks[track_idx].active)
@@ -721,10 +725,57 @@ void PyramidLive_NotifyFill(
    g_pyramid_tracks[track_idx].pending_order_ticket = 0;
    PyramidLive_ExecuteActionsFromResponse(
       g_pyramid_tracks[track_idx].symbol,
-      (ulong)PositionGetInteger(POSITION_MAGIC),
+      magic,
       track_idx,
       response
    );
+}
+
+//+------------------------------------------------------------------+
+void PyramidLive_QueueCloseSession(const int track_idx)
+{
+   if(track_idx < 0 || !g_pyramid_tracks[track_idx].active)
+      return;
+   g_pyramid_tracks[track_idx].close_pending = true;
+}
+
+//+------------------------------------------------------------------+
+void PyramidLive_ProcessPendingCloses(const ulong magic)
+{
+   for(int i = 0; i < PYRAMID_LIVE_MAX_TRACKS; i++)
+   {
+      if(!g_pyramid_tracks[i].active || !g_pyramid_tracks[i].close_pending)
+         continue;
+      PyramidLive_CloseSession(i, magic);
+   }
+}
+
+//+------------------------------------------------------------------+
+void PyramidLive_QueueCloseForSymbol(const string symbol, const ulong magic)
+{
+   for(int i = 0; i < PYRAMID_LIVE_MAX_TRACKS; i++)
+   {
+      if(!g_pyramid_tracks[i].active)
+         continue;
+      if(g_pyramid_tracks[i].symbol != symbol)
+         continue;
+      PyramidLive_QueueCloseSession(i);
+   }
+}
+
+//+------------------------------------------------------------------+
+void PyramidLive_QueueCloseForPosition(const ulong position_id, const string symbol, const ulong magic)
+{
+   for(int i = 0; i < PYRAMID_LIVE_MAX_TRACKS; i++)
+   {
+      if(!g_pyramid_tracks[i].active)
+         continue;
+      if(g_pyramid_tracks[i].symbol != symbol)
+         continue;
+      if(g_pyramid_tracks[i].base_ticket > 0 && g_pyramid_tracks[i].base_ticket != position_id)
+         continue;
+      PyramidLive_QueueCloseSession(i);
+   }
 }
 
 //+------------------------------------------------------------------+
@@ -747,7 +798,8 @@ void PyramidLive_CloseSession(const int track_idx, const ulong magic)
 void PyramidLive_OnTradeTransaction(
    const MqlTradeTransaction &trans,
    const MqlTradeRequest &request,
-   const MqlTradeResult &result
+   const MqlTradeResult &result,
+   const ulong magic
 )
 {
    if(trans.type != TRADE_TRANSACTION_DEAL_ADD)
@@ -784,7 +836,7 @@ void PyramidLive_OnTradeTransaction(
       if(g_pyramid_tracks[i].pending_order_ticket != order_ticket)
          continue;
 
-      PyramidLive_NotifyFill(i, fill_price, position_ticket, order_ticket);
+      PyramidLive_NotifyFill(i, fill_price, position_ticket, order_ticket, magic);
       break;
    }
 }
@@ -823,7 +875,7 @@ void PyramidLive_PruneClosedTracks(const string symbol, const ulong magic)
       }
 
       if(!has_base)
-         PyramidLive_CloseSession(i, magic);
+         PyramidLive_QueueCloseSession(i);
    }
 }
 

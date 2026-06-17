@@ -386,6 +386,20 @@ void DbbsExit_PurgeClosed()
 }
 
 //+------------------------------------------------------------------+
+void DbbsExit_PurgeByPosition(const ulong position_id)
+{
+   if(position_id == 0)
+      return;
+   for(int i = 0; i < DBBS_EXIT_MAX_TRACKS; i++)
+   {
+      if(!g_dbbs_tracks[i].active)
+         continue;
+      if(g_dbbs_tracks[i].ticket == position_id)
+         DbbsExit_ClearSlot(i);
+   }
+}
+
+//+------------------------------------------------------------------+
 void DbbsExit_OnNewH1Bar(const string symbol)
 {
    if(!DbbsExit_SymbolHasActiveTrack(symbol))

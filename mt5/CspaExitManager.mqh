@@ -433,6 +433,20 @@ void CspaExit_PurgeClosed()
 }
 
 //+------------------------------------------------------------------+
+void CspaExit_PurgeByPosition(const ulong position_id)
+{
+   if(position_id == 0)
+      return;
+   for(int i = 0; i < CSPA_EXIT_MAX_TRACKS; i++)
+   {
+      if(!g_cspa_tracks[i].active)
+         continue;
+      if(g_cspa_tracks[i].ticket == position_id)
+         CspaExit_ClearSlot(i);
+   }
+}
+
+//+------------------------------------------------------------------+
 void CspaExit_OnNewBar(const string symbol, const ENUM_TIMEFRAMES tf)
 {
    MqlRates rates[];
