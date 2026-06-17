@@ -46,6 +46,9 @@ class LivePyramidRegistry:
     ) -> LivePyramidSession:
         if not is_live_pyramid_enabled(setup_type):
             raise RuntimeError(f"live pyramid disabled for setup_type={setup_type}")
+        existing = self.get_by_trade_id(trade_id)
+        if existing is not None and not existing.closed:
+            return existing
         session = create_live_pyramid_session(
             trade_id=trade_id,
             setup_type=setup_type,

@@ -183,6 +183,7 @@ class PyramidRegisterResponse(BaseModel):
     trade_id: str
     pyramid_group_id: str
     live_pyramid_enabled: bool
+    max_pyramid_layers: int = 3
     message: str = "registered"
 
 
@@ -538,6 +539,7 @@ async def pyramid_register(request: PyramidRegisterRequest) -> PyramidRegisterRe
         trade_id=session.trade_id,
         pyramid_group_id=session.pyramid_group_id,
         live_pyramid_enabled=True,
+        max_pyramid_layers=session.mgr.max_pyramid_layers,
     )
 
 

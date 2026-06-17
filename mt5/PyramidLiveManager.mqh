@@ -20,11 +20,15 @@ struct PyramidLiveTrack
    ulong    pending_order_ticket;
    int      entry_bar_index;
    int      current_bar_index;
+   int      max_layers;
    datetime last_bar_time;
 };
 
 PyramidLiveTrack g_pyramid_tracks[PYRAMID_LIVE_MAX_TRACKS];
 string g_pyramid_api_base = "http://127.0.0.1:8000";
+
+void PyramidLive_QueueCloseSession(const int track_idx);
+void PyramidLive_CloseSession(const int track_idx, const ulong magic);
 
 //+------------------------------------------------------------------+
 void PyramidLive_SetApiBaseFromTradeUrl(const string trade_signal_url)
@@ -120,6 +124,90 @@ void PyramidLive_ClearSlot(const int idx)
    g_pyramid_tracks[idx].trade_id = "";
    g_pyramid_tracks[idx].pyramid_group_id = "";
    g_pyramid_tracks[idx].pending_order_ticket = 0;
+   g_pyramid_tracks[idx].max_layers = 3;
+}
+
+//+------------------------------------------------------------------+
+bool PyramidLive_PendingOrderActive(const PyramidLiveTrack &track, const string symbol)
+{
+   if(track.pending_order_ticket == 0)
+      return false;
+   if(!OrderSelect(track.pending_order_ticket))
+      return false;
+   long order_magic = OrderGetInteger(ORDER_MAGIC);
+   if((ulong)order_magic != 0 && OrderGetString(ORDER_SYMBOL) != symbol)
+      return false;
+   ENUM_ORDER_STATE state = (ENUM_ORDER_STATE)OrderGetInteger(ORDER_STATE);
+   return (state == ORDER_STATE_PLACED || state == ORDER_STATE_PARTIAL);
+}
+
+//+------------------------------------------------------------------+
+int PyramidLive_CountSessionPositions(
+   const string symbol,
+   const ulong magic,
+   const PyramidLiveTrack &track
+)
+{
+   int count = 0;
+   string prefix = "PropEA_PYR_" + StringSubstr(track.pyramid_group_id, 0, 12);
+
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   {
+      ulong ticket = PositionGetTicket(i);
+      if(ticket == 0)
+         continue;
+      if(!PositionSelectByTicket(ticket))
+         continue;
+      if(PositionGetString(POSITION_SYMBOL) != symbol)
+         continue;
+      if(PositionGetInteger(POSITION_MAGIC) != (long)magic)
+         continue;
+
+      if(ticket == track.base_ticket)
+      {
+         count++;
+         continue;
+      }
+
+      string comment = PositionGetString(POSITION_COMMENT);
+      if(StringFind(comment, prefix) == 0)
+         count++;
+   }
+   return count;
+}
+
+//+------------------------------------------------------------------+
+bool PyramidLive_AtLayerCap(
+   const string symbol,
+   const ulong magic,
+   const PyramidLiveTrack &track
+)
+{
+   int max_layers = track.max_layers > 0 ? track.max_layers : 3;
+   int occupied = PyramidLive_CountSessionPositions(symbol, magic, track);
+   if(PyramidLive_PendingOrderActive(track, symbol))
+      occupied++;
+   return occupied >= max_layers;
+}
+
+//+------------------------------------------------------------------+
+void PyramidLive_CloseOtherSymbolTracks(
+   const string symbol,
+   const string keep_trade_id,
+   const ulong magic
+)
+{
+   for(int i = 0; i < PYRAMID_LIVE_MAX_TRACKS; i++)
+   {
+      if(!g_pyramid_tracks[i].active)
+         continue;
+      if(g_pyramid_tracks[i].symbol != symbol)
+         continue;
+      if(g_pyramid_tracks[i].trade_id == keep_trade_id)
+         continue;
+      Print("PyramidLive closing stale symbol track trade_id=", g_pyramid_tracks[i].trade_id);
+      PyramidLive_QueueCloseSession(i);
+   }
 }
 
 //+------------------------------------------------------------------+
@@ -457,6 +545,22 @@ bool PyramidLive_ExecuteSingleAction(
 
    if(action == "PYRAMID_LIMIT")
    {
+      if(PyramidLive_AtLayerCap(symbol, magic, track))
+      {
+         Print("PyramidLive skip LIMIT — layer cap reached trade_id=", track.trade_id);
+         return false;
+      }
+      if(PyramidLive_PendingOrderActive(track, symbol))
+      {
+         Print("PyramidLive skip LIMIT — pending order already active ticket=", track.pending_order_ticket);
+         return false;
+      }
+      if(track.pending_order_ticket > 0)
+      {
+         PyramidLive_CancelPending(track.pending_order_ticket, symbol);
+         track.pending_order_ticket = 0;
+      }
+
       string comment = StringFormat("PropEA_PYR_%s_L%d", StringSubstr(group_id, 0, 12), layer_index);
       ulong order_ticket = 0;
       if(!PyramidLive_PlaceLimit(symbol, direction, limit_price, lot_size, sl, tp, magic, comment, order_ticket))
@@ -467,6 +571,16 @@ bool PyramidLive_ExecuteSingleAction(
 
    if(action == "PYRAMID_MARKET_FALLBACK")
    {
+      if(PyramidLive_AtLayerCap(symbol, magic, track))
+      {
+         Print("PyramidLive skip MARKET_FALLBACK — layer cap reached trade_id=", track.trade_id);
+         return false;
+      }
+      if(PyramidLive_PendingOrderActive(track, symbol))
+      {
+         PyramidLive_CancelPending(track.pending_order_ticket, symbol);
+         track.pending_order_ticket = 0;
+      }
       string comment = StringFormat("PropEA_PYR_%s_L%d", StringSubstr(group_id, 0, 12), layer_index);
       MqlTradeRequest request;
       MqlTradeResult  result;
@@ -587,6 +701,14 @@ bool PyramidLive_RegisterAfterEntry(
       return false;
    }
 
+   int existing = PyramidLive_FindByTradeId(trade_id);
+   if(existing >= 0)
+   {
+      Print("PyramidLive register skip — already active trade_id=", trade_id);
+      return true;
+   }
+
+   PyramidLive_CloseOtherSymbolTracks(symbol, trade_id, magic);
    double atr = 0.0;
    if(!ExtractJsonDouble(response_json, "exit_atr", atr) || atr <= 0.0)
       atr = PyramidLive_ComputeAtr(symbol, tf, 14);
@@ -628,6 +750,11 @@ bool PyramidLive_RegisterAfterEntry(
 
    string group_id = "";
    ExtractJsonString(response, "pyramid_group_id", group_id);
+   double max_layers_d = 3.0;
+   ExtractJsonDouble(response, "max_pyramid_layers", max_layers_d);
+   int max_layers = (int)max_layers_d;
+   if(max_layers < 2)
+      max_layers = 3;
 
    int slot = PyramidLive_FindSlot();
    if(slot < 0)
@@ -647,9 +774,10 @@ bool PyramidLive_RegisterAfterEntry(
    g_pyramid_tracks[slot].pending_order_ticket = 0;
    g_pyramid_tracks[slot].entry_bar_index = 0;
    g_pyramid_tracks[slot].current_bar_index = 0;
+   g_pyramid_tracks[slot].max_layers = max_layers;
    g_pyramid_tracks[slot].last_bar_time = 0;
 
-   Print("PyramidLive registered trade_id=", trade_id, " group=", group_id);
+   Print("PyramidLive registered trade_id=", trade_id, " group=", group_id, " max_layers=", max_layers);
    return true;
 }
 
