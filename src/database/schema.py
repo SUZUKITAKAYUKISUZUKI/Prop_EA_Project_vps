@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import sqlite3
 
+from src.database.schema_migrations import apply_portfolio_migrations
+
 PORTFOLIO_TABLES = (
     "runs",
     "trades",
@@ -16,6 +18,16 @@ PORTFOLIO_TABLES = (
     "analytics_cache",
     "trade_events",
     "import_state",
+    "imported_files",
+    "daemon_status",
+    "schema_meta",
+    "bt_runs",
+    "bt_trades",
+    "bt_run_legacy_map",
+    "wft_runs",
+    "wft_windows",
+    "wft_trades",
+    "wft_summary",
 )
 
 MARKET_TABLES = ("candles",)
@@ -24,6 +36,8 @@ PORTFOLIO_DDL = """
 CREATE TABLE IF NOT EXISTS runs (
     run_id INTEGER PRIMARY KEY AUTOINCREMENT,
     run_type TEXT NOT NULL,
+    source TEXT NOT NULL DEFAULT 'BACKTEST' CHECK (source IN ('BACKTEST','WFT_OOS','LIVE','FORWARD_TEST')),
+    schema_version INTEGER NOT NULL DEFAULT 4,
     strategy TEXT,
     created_at TEXT NOT NULL,
     description TEXT,
@@ -33,6 +47,7 @@ CREATE TABLE IF NOT EXISTS runs (
 CREATE TABLE IF NOT EXISTS trades (
     trade_id INTEGER PRIMARY KEY AUTOINCREMENT,
     run_id INTEGER NOT NULL,
+    source TEXT NOT NULL DEFAULT 'BACKTEST' CHECK (source IN ('BACKTEST','WFT_OOS','LIVE','FORWARD_TEST')),
     strategy TEXT,
     symbol TEXT,
     direction TEXT,
@@ -51,6 +66,8 @@ CREATE TABLE IF NOT EXISTS features (
     feature_id INTEGER PRIMARY KEY AUTOINCREMENT,
     trade_id INTEGER,
     run_id INTEGER NOT NULL,
+    source TEXT NOT NULL DEFAULT 'BACKTEST' CHECK (source IN ('BACKTEST','WFT_OOS','LIVE','FORWARD_TEST')),
+    schema_version INTEGER NOT NULL DEFAULT 1,
     strategy TEXT,
     feature_json TEXT NOT NULL,
     source_key TEXT,
@@ -165,6 +182,8 @@ CREATE INDEX IF NOT EXISTS idx_analytics_cache_updated ON analytics_cache(update
 
 CREATE TABLE IF NOT EXISTS trade_events (
     event_id TEXT PRIMARY KEY,
+    source TEXT NOT NULL DEFAULT 'LIVE' CHECK (source IN ('BACKTEST','WFT_OOS','LIVE','FORWARD_TEST')),
+    schema_version INTEGER NOT NULL DEFAULT 1,
     timestamp TEXT NOT NULL,
     event_type TEXT NOT NULL,
     trade_id TEXT,
@@ -180,10 +199,132 @@ CREATE TABLE IF NOT EXISTS import_state (
     updated_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS imported_files (
+    file_hash TEXT PRIMARY KEY,
+    filename TEXT NOT NULL,
+    imported_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS daemon_status (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    last_seen TEXT NOT NULL,
+    processed_files INTEGER NOT NULL DEFAULT 0,
+    processed_trades INTEGER NOT NULL DEFAULT 0,
+    last_error TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_imported_files_filename ON imported_files(filename);
+
 CREATE INDEX IF NOT EXISTS idx_trade_events_timestamp ON trade_events(timestamp);
 CREATE INDEX IF NOT EXISTS idx_trade_events_trade_id ON trade_events(trade_id);
 CREATE INDEX IF NOT EXISTS idx_trade_events_strategy ON trade_events(strategy);
 CREATE INDEX IF NOT EXISTS idx_trade_events_event_type ON trade_events(event_type);
+
+CREATE TABLE IF NOT EXISTS bt_runs (
+    run_id TEXT PRIMARY KEY,
+    strategy TEXT,
+    symbol TEXT,
+    started_at TEXT,
+    finished_at TEXT,
+    total_trades INTEGER,
+    total_r REAL,
+    pf REAL,
+    win_rate REAL,
+    avg_r REAL,
+    max_dd REAL,
+    sharpe REAL,
+    source_version TEXT,
+    notes TEXT
+);
+
+CREATE TABLE IF NOT EXISTS bt_trades (
+    trade_id TEXT PRIMARY KEY,
+    run_id TEXT NOT NULL,
+    strategy TEXT,
+    symbol TEXT,
+    open_time TEXT,
+    close_time TEXT,
+    direction TEXT,
+    r_multiple REAL,
+    pnl REAL,
+    exit_reason TEXT,
+    FOREIGN KEY(run_id) REFERENCES bt_runs(run_id)
+);
+
+CREATE TABLE IF NOT EXISTS bt_run_legacy_map (
+    bt_run_id TEXT PRIMARY KEY,
+    legacy_run_id INTEGER NOT NULL,
+    description TEXT,
+    linked_at TEXT NOT NULL,
+    FOREIGN KEY(bt_run_id) REFERENCES bt_runs(run_id)
+);
+
+CREATE TABLE IF NOT EXISTS wft_runs (
+    wft_id TEXT PRIMARY KEY,
+    strategy TEXT,
+    is_months INTEGER,
+    oos_months INTEGER,
+    step_months INTEGER,
+    total_windows INTEGER,
+    created_at TEXT
+);
+
+CREATE TABLE IF NOT EXISTS wft_windows (
+    window_id TEXT PRIMARY KEY,
+    wft_id TEXT NOT NULL,
+    window_no INTEGER NOT NULL,
+    is_start TEXT,
+    is_end TEXT,
+    oos_start TEXT,
+    oos_end TEXT,
+    total_r REAL,
+    pf REAL,
+    max_dd REAL,
+    pass_flag INTEGER,
+    FOREIGN KEY(wft_id) REFERENCES wft_runs(wft_id)
+);
+
+CREATE TABLE IF NOT EXISTS wft_trades (
+    trade_id TEXT PRIMARY KEY,
+    window_id TEXT NOT NULL,
+    wft_id TEXT NOT NULL,
+    strategy TEXT,
+    symbol TEXT,
+    open_time TEXT,
+    close_time TEXT,
+    direction TEXT,
+    r_multiple REAL,
+    pnl REAL,
+    exit_reason TEXT,
+    FOREIGN KEY(window_id) REFERENCES wft_windows(window_id),
+    FOREIGN KEY(wft_id) REFERENCES wft_runs(wft_id)
+);
+
+CREATE TABLE IF NOT EXISTS wft_summary (
+    wft_id TEXT PRIMARY KEY,
+    total_oos_r REAL,
+    mean_oos_pf REAL,
+    mean_oos_dd REAL,
+    pass_rate REAL,
+    stability_json TEXT,
+    created_at TEXT,
+    FOREIGN KEY(wft_id) REFERENCES wft_runs(wft_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_bt_trades_run ON bt_trades(run_id);
+CREATE INDEX IF NOT EXISTS idx_wft_windows_wft ON wft_windows(wft_id);
+CREATE INDEX IF NOT EXISTS idx_wft_trades_window ON wft_trades(window_id);
+
+CREATE TABLE IF NOT EXISTS schema_meta (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_runs_source ON runs(source);
+CREATE INDEX IF NOT EXISTS idx_trades_source ON trades(source);
+CREATE INDEX IF NOT EXISTS idx_features_source ON features(source);
+CREATE INDEX IF NOT EXISTS idx_trade_events_source ON trade_events(source);
 """
 
 MARKET_DDL = """
@@ -221,6 +362,7 @@ def create_portfolio_schema(
 ) -> None:
     _apply_pragmas(conn, journal_mode, synchronous)
     conn.executescript(PORTFOLIO_DDL)
+    apply_portfolio_migrations(conn)
 
 
 def create_market_schema(

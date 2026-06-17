@@ -3,6 +3,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from src.database.data_source import FEATURE_LOG_SCHEMA_VERSION
+
 SESSION_BY_HOUR = (
     (0, 7, "ASIA"),
     (7, 12, "LONDON"),
@@ -174,4 +176,5 @@ def build_feature_snapshot(
             "strategy_letter": signal.get("strategy_letter"),
         }
 
+    features["schema_version"] = FEATURE_LOG_SCHEMA_VERSION
     return {k: v for k, v in features.items() if v is not None}

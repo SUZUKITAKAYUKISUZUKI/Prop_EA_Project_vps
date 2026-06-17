@@ -207,12 +207,12 @@ def load_smrs_dataset(
     start: pd.Timestamp | None = None,
     end: pd.Timestamp | None = None,
 ) -> pd.DataFrame:
-    df = pd.read_csv(input_path)
+    from src.services.feature_loader import load_feature_dataframe
+
+    df = load_feature_dataframe(input_path, start=start, end=end)
+    if df.empty:
+        raise FileNotFoundError(f"SMRS feature log not found in SQLite or CSV: {input_path}")
     work = prepare_smrs_frame(df)
-    if start is not None:
-        work = work[work["timestamp"] >= start]
-    if end is not None:
-        work = work[work["timestamp"] <= end]
     return work.sort_values("timestamp").reset_index(drop=True)
 
 

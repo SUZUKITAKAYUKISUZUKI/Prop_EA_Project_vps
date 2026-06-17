@@ -180,7 +180,11 @@ def load_poc_cohort(
     enrich: bool = True,
     cache_path: __import__("pathlib").Path | None = None,
 ) -> pd.DataFrame:
-    df = pd.read_csv(path)
+    from src.services.feature_loader import load_feature_dataframe
+
+    df = load_feature_dataframe(path, start=start, end=end)
+    if df.empty:
+        raise FileNotFoundError(f"VAMR feature log not found in SQLite or CSV: {path}")
     df = add_derived_features(df)
     df = df[df["tp_target"] == "POC"].copy()
     df = df[df["pair"].astype(str).str.upper().isin(ALLOWED_PAIRS)].copy()
@@ -193,15 +197,23 @@ def load_poc_cohort(
     if not enrich:
         return df
 
-    if cache_path is not None and cache_path.exists():
-        cached = pd.read_csv(cache_path)
-        cached["timestamp"] = pd.to_datetime(cached["timestamp"])
-        if len(cached) == len(df):
-            return add_derived_features(cached)
+    if cache_path is not None:
+        cached = load_feature_dataframe(cache_path, allow_csv_fallback=True)
+        if not cached.empty:
+            cached["timestamp"] = pd.to_datetime(cached["timestamp"])
+            if len(cached) == len(df):
+                return add_derived_features(cached)
 
     enriched = enrich_from_ohlcv(df)
     enriched = add_derived_features(enriched)
     if cache_path is not None:
-        cache_path.parent.mkdir(parents=True, exist_ok=True)
-        enriched.to_csv(cache_path, index=False)
+        from src.services.feature_write_service import persist_dataframe_features
+
+        persist_dataframe_features(
+            enriched,
+            strategy="VAMR",
+            logical_path=str(cache_path),
+            csv_kind="feature_cache",
+            export_csv_path=cache_path,
+        )
     return enriched

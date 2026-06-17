@@ -590,9 +590,11 @@ def initialize_ttm_bayes_ev(
         return reset_ttm_bayes_model(model)  # type: ignore[return-value]
 
     csv_path = csv_path or Path(os.getenv("TTM_EV_TRAIN_CSV", str(DEFAULT_TTM_EV_TRAIN_CSV)))
-    if not csv_path.is_file():
+    from src.services.feature_loader import load_feature_dataframe
+
+    raw_df = load_feature_dataframe(csv_path)
+    if raw_df.empty:
         raise FileNotFoundError(f"TTM Bayes training CSV not found: {csv_path}")
-    raw_df = pd.read_csv(csv_path)
     train_df = filter_training_rows(raw_df, train_end=train_end or os.getenv("TTM_EV_TRAIN_END"))
     if len(train_df) < TTM_BAYES_MIN_TRAIN_ROWS:
         raise ValueError(

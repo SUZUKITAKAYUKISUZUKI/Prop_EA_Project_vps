@@ -5,6 +5,8 @@
 #ifndef PYRAMID_LIVE_MANAGER_MQH
 #define PYRAMID_LIVE_MANAGER_MQH
 
+#include "PropEA_WebRequestLock.mqh"
+
 #define PYRAMID_LIVE_MAX_TRACKS 8
 
 struct PyramidLiveTrack
@@ -49,6 +51,9 @@ string PyramidLive_ApiUrl(const string path)
 //+------------------------------------------------------------------+
 bool PyramidLive_PostJson(const string url, const string body, string &response)
 {
+   if(!PropEA_TryAcquireWebRequestLock())
+      return false;
+
    char post[];
    char result[];
    string result_headers;
@@ -66,6 +71,7 @@ bool PyramidLive_PostJson(const string url, const string body, string &response)
       result,
       result_headers
    );
+   PropEA_ReleaseWebRequestLock();
 
    if(status == -1)
    {

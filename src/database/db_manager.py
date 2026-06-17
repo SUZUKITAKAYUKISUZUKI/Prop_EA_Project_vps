@@ -9,6 +9,13 @@ from pathlib import Path
 from typing import Any, Iterator
 
 from src.database.schema import create_market_schema, create_portfolio_schema
+from src.database.data_source import (
+    FEATURE_LOG_SCHEMA_VERSION,
+    PORTFOLIO_DB_SCHEMA_VERSION,
+    infer_source_from_run_type,
+    normalize_source,
+    resolve_feature_schema_version,
+)
 
 
 def utc_now_iso() -> str:
@@ -127,14 +134,21 @@ class DatabaseManager:
         description: str | None = None,
         parameters: dict[str, Any] | None = None,
         created_at: str | None = None,
+        source: str | None = None,
+        schema_version: int | None = None,
     ) -> int:
+        resolved_source = normalize_source(
+            source or infer_source_from_run_type(run_type, description)
+        )
         cur = self.portfolio.execute(
             """
-            INSERT INTO runs (run_type, strategy, created_at, description, parameters_json)
-            VALUES (?, ?, ?, ?, ?)
+            INSERT INTO runs (run_type, source, schema_version, strategy, created_at, description, parameters_json)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 run_type,
+                resolved_source,
+                schema_version if schema_version is not None else PORTFOLIO_DB_SCHEMA_VERSION,
                 strategy,
                 created_at or utc_now_iso(),
                 description,
@@ -142,6 +156,15 @@ class DatabaseManager:
             ),
         )
         return int(cur.lastrowid)
+
+    def get_run_source(self, run_id: int) -> str:
+        row = self.portfolio.execute(
+            "SELECT source FROM runs WHERE run_id=? LIMIT 1",
+            (run_id,),
+        ).fetchone()
+        if row and row[0]:
+            return str(row[0])
+        return "BACKTEST"
 
     def insert_trade(
         self,
@@ -158,16 +181,19 @@ class DatabaseManager:
         profit: float | None = None,
         result: str | None = None,
         source_trade_id: str | None = None,
+        source: str | None = None,
         upsert: bool = True,
     ) -> int:
+        trade_source = normalize_source(source or self.get_run_source(run_id))
         sql = """
             INSERT INTO trades (
-                run_id, strategy, symbol, direction, entry_time, exit_time,
+                run_id, source, strategy, symbol, direction, entry_time, exit_time,
                 entry_price, exit_price, r_multiple, profit, result, source_trade_id
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """
         params = (
             run_id,
+            trade_source,
             strategy,
             symbol,
             direction,
@@ -183,6 +209,7 @@ class DatabaseManager:
         if upsert:
             sql += """
                 ON CONFLICT(run_id, source_trade_id) DO UPDATE SET
+                    source=excluded.source,
                     strategy=excluded.strategy,
                     symbol=excluded.symbol,
                     direction=excluded.direction,
@@ -218,20 +245,31 @@ class DatabaseManager:
         trade_id: int | None = None,
         strategy: str | None = None,
         source_key: str | None = None,
+        source: str | None = None,
+        schema_version: int | None = None,
         upsert: bool = True,
     ) -> int:
+        payload_dict = feature_json if isinstance(feature_json, dict) else None
         payload = feature_json if isinstance(feature_json, str) else json.dumps(feature_json, ensure_ascii=False)
         if source_key is None:
             source_key = f"auto:{run_id}:{hash(payload) & 0xFFFFFFFF}"
+        feature_source = normalize_source(source or self.get_run_source(run_id))
+        feature_schema_version = (
+            schema_version
+            if schema_version is not None
+            else resolve_feature_schema_version(payload_dict)
+        )
         sql = """
-            INSERT INTO features (trade_id, run_id, strategy, feature_json, source_key)
-            VALUES (?, ?, ?, ?, ?)
+            INSERT INTO features (trade_id, run_id, source, schema_version, strategy, feature_json, source_key)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
         """
-        params = (trade_id, run_id, strategy, payload, source_key)
+        params = (trade_id, run_id, feature_source, feature_schema_version, strategy, payload, source_key)
         if upsert:
             sql += """
                 ON CONFLICT(run_id, source_key) DO UPDATE SET
                     trade_id=excluded.trade_id,
+                    source=excluded.source,
+                    schema_version=excluded.schema_version,
                     strategy=excluded.strategy,
                     feature_json=excluded.feature_json
             """

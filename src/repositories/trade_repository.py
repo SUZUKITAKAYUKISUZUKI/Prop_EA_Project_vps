@@ -7,6 +7,7 @@ from typing import Any
 import pandas as pd
 
 from src.database.db_manager import DatabaseManager
+from src.database.data_source import DataSource, normalize_source
 from src.repositories.base import create_default_db_manager, normalize_source_path
 from src.repositories.run_repository import RunRepository
 
@@ -45,12 +46,16 @@ class TradeRepository:
         symbol: str | None,
         start: str | None,
         end: str | None,
+        data_source: str | None = None,
     ) -> tuple[str, list[Any]]:
         clauses = ["1=1"]
         params: list[Any] = []
         if run_id is not None:
             clauses.append("run_id=?")
             params.append(run_id)
+        if data_source:
+            clauses.append("source=?")
+            params.append(normalize_source(data_source))
         if strategy:
             clauses.append("strategy=?")
             params.append(strategy)
@@ -97,11 +102,14 @@ class TradeRepository:
             "entry_time",
             "exit_time",
             "run_id",
+            "source",
         ]
         for col in cols:
             if col not in df.columns:
                 df[col] = None
-        return df[cols + (["source_file"] if source else [])].sort_values("timestamp").reset_index(drop=True)
+        if "source" in df.columns:
+            df["data_source"] = df["source"]
+        return df[cols + (["data_source"] if "data_source" in df.columns else []) + (["source_file"] if source else [])].sort_values("timestamp").reset_index(drop=True)
 
     def get_trade(self, trade_id: int) -> dict[str, Any] | None:
         row = self._db.query("SELECT * FROM trades WHERE trade_id=?", (trade_id,), one=True)
@@ -116,6 +124,7 @@ class TradeRepository:
         symbol: str | None = None,
         start: str | None = None,
         end: str | None = None,
+        data_source: DataSource | str | None = None,
         as_dataframe: bool = False,
     ) -> list[dict[str, Any]] | pd.DataFrame:
         resolved_run = self._resolve_run_id(run_id=run_id, source_path=source_path)
@@ -125,6 +134,7 @@ class TradeRepository:
             symbol=symbol,
             start=start,
             end=end,
+            data_source=data_source,
         )
         rows = self._db.query(
             f"""

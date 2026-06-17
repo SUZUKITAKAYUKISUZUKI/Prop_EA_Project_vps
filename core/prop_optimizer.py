@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal
@@ -412,22 +413,35 @@ def run_pfoo(
         json.dumps(result.recommended_weights, indent=2),
         encoding="utf-8",
     )
-    result.risk_budget.top_candidates.to_csv(artifact_dir / "risk_budget_top10.csv", index=False)
-    mc_summary = pd.DataFrame(
-        [
-            {
-                "trials": t,
-                "pass_rate": mc.pass_rate,
-                "fail_rate": mc.fail_rate,
-                "avg_pass_days": mc.avg_pass_days,
-                "worst_dd": mc.worst_dd,
-                "dd_p95": mc.dd_p95,
-                "expected_utility": mc.expected_utility,
-            }
-            for t, mc in sorted(result.monte_carlo.items())
-        ]
-    )
-    mc_summary.to_csv(artifact_dir / "monte_carlo_validation.csv", index=False)
+
+    analytics = None
+    try:
+        from src.services.analytics_write_service import AnalyticsWriteService
+
+        analytics = AnalyticsWriteService()
+        analytics.save_pfoo_artifacts(artifact_dir=str(artifact_dir), result=result)
+        print(f"PFOO artifacts saved to SQLite (run registered under {artifact_dir})")
+    finally:
+        if analytics is not None:
+            analytics.close()
+
+    if os.environ.get("ANALYTICS_EXPORT_CSV", "0").strip().lower() in {"1", "true", "yes"}:
+        result.risk_budget.top_candidates.to_csv(artifact_dir / "risk_budget_top10.csv", index=False)
+        mc_summary = pd.DataFrame(
+            [
+                {
+                    "trials": t,
+                    "pass_rate": mc.pass_rate,
+                    "fail_rate": mc.fail_rate,
+                    "avg_pass_days": mc.avg_pass_days,
+                    "worst_dd": mc.worst_dd,
+                    "dd_p95": mc.dd_p95,
+                    "expected_utility": mc.expected_utility,
+                }
+                for t, mc in sorted(result.monte_carlo.items())
+            ]
+        )
+        mc_summary.to_csv(artifact_dir / "monte_carlo_validation.csv", index=False)
 
     result.report_path = report_path
     result.artifact_dir = artifact_dir

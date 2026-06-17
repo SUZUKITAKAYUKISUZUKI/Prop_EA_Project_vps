@@ -36,7 +36,7 @@ class RunRepository:
     def get_run(self, run_id: int) -> dict[str, Any] | None:
         row = self._db.query(
             """
-            SELECT run_id, run_type, strategy, created_at, description, parameters_json
+            SELECT run_id, run_type, source, schema_version, strategy, created_at, description, parameters_json
             FROM runs WHERE run_id=?
             """,
             (run_id,),
@@ -52,7 +52,7 @@ class RunRepository:
         limit: int | None = None,
     ) -> list[dict[str, Any]]:
         sql = """
-            SELECT run_id, run_type, strategy, created_at, description, parameters_json
+            SELECT run_id, run_type, source, schema_version, strategy, created_at, description, parameters_json
             FROM runs
             WHERE 1=1
         """

@@ -11,6 +11,7 @@ from typing import Any
 import pandas as pd
 
 from src.database.db_manager import DatabaseManager, utc_now_iso
+from src.database.data_source import infer_source_from_path
 
 logger = logging.getLogger(__name__)
 
@@ -159,6 +160,7 @@ def _ensure_run(
         description=rel,
         parameters={"source_file": rel, "checksum": _file_checksum(path)},
         created_at=utc_now_iso(),
+        source=infer_source_from_path(path, csv_kind=csv_kind),
     )
 
 

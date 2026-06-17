@@ -21,6 +21,14 @@ class FeatureRepository:
         if self._owns_connection:
             self._db.close()
 
+    def resolve_run_id(
+        self,
+        *,
+        run_id: int | None = None,
+        source_path: str | None = None,
+    ) -> int | None:
+        return self._resolve_run_id(run_id=run_id, source_path=source_path)
+
     def _resolve_run_id(self, *, run_id: int | None, source_path: str | None) -> int | None:
         if run_id is not None:
             return run_id

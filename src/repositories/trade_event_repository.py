@@ -5,6 +5,7 @@ import json
 from typing import Any
 
 from src.database.db_manager import DatabaseManager, utc_now_iso
+from src.database.data_source import resolve_feature_schema_version
 from src.repositories.base import create_default_db_manager
 
 LIVE_RUN_DESCRIPTION = "dropbox_live_stream"
@@ -36,6 +37,7 @@ class TradeEventRepository:
             strategy="portfolio",
             description=LIVE_RUN_DESCRIPTION,
             parameters={"source": "dropbox", "stream": "trade_events"},
+            source="LIVE",
         )
         return self._live_run_id
 
@@ -62,6 +64,8 @@ class TradeEventRepository:
             features,
             strategy=event.get("strategy"),
             source_key=f"event:{event['event_id']}",
+            source="LIVE",
+            schema_version=resolve_feature_schema_version(features if isinstance(features, dict) else None),
             upsert=True,
         )
         return feature_id > 0
@@ -75,14 +79,17 @@ class TradeEventRepository:
         event_id = str(event["event_id"])
         verb = "INSERT OR IGNORE" if ignore_duplicates else "INSERT"
         payload = {k: v for k, v in event.items() if k not in {"event_id", "timestamp", "event_type", "trade_id", "strategy", "symbol"}}
+        schema_version = resolve_feature_schema_version(event if isinstance(event, dict) else None)
         cur = self._db.portfolio.execute(
             f"""
             {verb} INTO trade_events (
-                event_id, timestamp, event_type, trade_id, strategy, symbol, payload_json, imported_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                event_id, source, schema_version, timestamp, event_type, trade_id, strategy, symbol, payload_json, imported_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 event_id,
+                "LIVE",
+                schema_version,
                 str(event.get("timestamp", utc_now_iso())),
                 str(event.get("event_type", "UNKNOWN")),
                 event.get("trade_id"),

@@ -24,16 +24,22 @@ from core.portfolio_equity_trail import load_pet_config, run_pet_monte_carlo_val
 
 
 def _load_trades(paths: list[Path] | None) -> pd.DataFrame:
+    from src.repositories.trade_repository import TradeRepository
+
     if not paths:
         default = PROJECT_ROOT / "backtest_results" / "main_abcde_3y.csv"
         if default.exists():
             paths = [default]
         else:
             return pd.DataFrame({"R": [0.5, -0.8, 1.0, -1.0, 1.2, -0.5]})
+    repo = TradeRepository()
     frames = []
-    for path in paths:
-        if path.exists():
-            frames.append(pd.read_csv(path))
+    try:
+        for path in paths:
+            if path.exists():
+                frames.append(repo.load_legacy_frame(path))
+    finally:
+        repo.close()
     if not frames:
         return pd.DataFrame({"R": [0.5, -0.8, 1.0, -1.0]})
     merged = pd.concat(frames, ignore_index=True)
