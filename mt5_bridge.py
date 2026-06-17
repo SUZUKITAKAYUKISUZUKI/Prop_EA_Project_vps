@@ -504,6 +504,7 @@ async def pyramid_register(request: PyramidRegisterRequest) -> PyramidRegisterRe
             detail=f"live pyramid disabled for setup_type={request.setup_type}",
         )
     registry = get_live_pyramid_registry()
+    acct = _pipeline_state.account
     try:
         session = registry.create_and_register(
             trade_id=request.trade_id,
@@ -523,6 +524,8 @@ async def pyramid_register(request: PyramidRegisterRequest) -> PyramidRegisterRe
             pyramid_group_id=request.pyramid_group_id,
             tick_size=request.tick_size,
             tick_value=request.tick_value,
+            equity=float(acct.equity),
+            phase_start_equity=float(acct.phase_start_equity),
         )
     except RuntimeError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc

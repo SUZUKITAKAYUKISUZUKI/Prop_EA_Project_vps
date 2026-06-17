@@ -11,10 +11,12 @@ EA (PropEA_Bridge.mq5) 経由の WebRequest 運用と併用可能。
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from typing import Any
 
-from feature_engineering import lot_from_risk_budget
+from audit.risk_manager import lot_from_risk_budget as lot_from_risk_budget_pair
+from strategies.market_utils import normalize_pair_name
 
 try:
     import MetaTrader5 as mt5
@@ -23,6 +25,12 @@ except ImportError:  # pragma: no cover
 
 DEFAULT_MAGIC = 20260601
 DEFAULT_DEVIATION = 20
+PROP_MAX_SINGLE_POSITION_LOSS_PCT = float(
+    os.getenv("FINTOKEI_SINGLE_POSITION_LOSS_LIMIT_PCT", "3.0")
+)
+PROP_REFERENCE_EQUITY = float(os.getenv("PROP_REFERENCE_EQUITY", "0") or "0")
+PROP_MAX_LOT_XAUUSD = float(os.getenv("PROP_MAX_LOT_XAUUSD", "0.50"))
+PROP_MAX_LOT_FX = float(os.getenv("PROP_MAX_LOT_FX", "2.00"))
 
 
 @dataclass
@@ -58,6 +66,129 @@ def normalize_lot(symbol: str, lot: float) -> float:
     return round(steps * step, 8)
 
 
+def reference_equity_for_risk_cap() -> float:
+    if PROP_REFERENCE_EQUITY > 0.0:
+        return PROP_REFERENCE_EQUITY
+    if mt5 is None:
+        return 0.0
+    acc = mt5.account_info()
+    return float(acc.equity) if acc else 0.0
+
+
+def effective_min_stop_points(symbol: str) -> int:
+    info = mt5.symbol_info(symbol) if mt5 else None
+    stops_level = int(info.trade_stops_level) if info else 0
+    canonical = normalize_pair_name(symbol) or symbol.upper()
+    floor_pts = 20
+    if canonical == "XAUUSD":
+        floor_pts = 50
+    elif canonical in ("AUDNZD", "EURGBP", "NZDUSD"):
+        floor_pts = 25
+    return max(stops_level + 2, floor_pts)
+
+
+def adjust_stops_for_deal(
+    symbol: str,
+    action: str,
+    market_price: float,
+    sl: float,
+    tp: float,
+) -> tuple[float, float, bool]:
+    info = mt5.symbol_info(symbol) if mt5 else None
+    point = float(info.point) if info and info.point else 0.00001
+    min_dist = effective_min_stop_points(symbol) * point
+    digits = int(info.digits) if info else 5
+    deal_sl = round(sl, digits)
+    deal_tp = round(tp, digits)
+
+    if action == "BUY":
+        if deal_sl > 0.0 and (deal_sl >= market_price or (market_price - deal_sl) < min_dist):
+            deal_sl = round(market_price - min_dist, digits)
+        if deal_tp > 0.0 and (deal_tp <= market_price or (deal_tp - market_price) < min_dist):
+            deal_tp = round(market_price + min_dist, digits)
+    elif action == "SELL":
+        if deal_sl > 0.0 and (deal_sl <= market_price or (deal_sl - market_price) < min_dist):
+            deal_sl = round(market_price + min_dist, digits)
+        if deal_tp > 0.0 and (deal_tp >= market_price or (market_price - deal_tp) < min_dist):
+            deal_tp = round(market_price - min_dist, digits)
+    else:
+        return deal_sl, deal_tp, False
+
+    if action == "BUY":
+        sl_ok = deal_sl <= 0.0 or (
+            deal_sl < market_price and (market_price - deal_sl) + point * 0.01 >= min_dist
+        )
+        tp_ok = deal_tp <= 0.0 or (
+            deal_tp > market_price and (deal_tp - market_price) + point * 0.01 >= min_dist
+        )
+    else:
+        sl_ok = deal_sl <= 0.0 or (
+            deal_sl > market_price and (deal_sl - market_price) + point * 0.01 >= min_dist
+        )
+        tp_ok = deal_tp <= 0.0 or (
+            deal_tp < market_price and (market_price - deal_tp) + point * 0.01 >= min_dist
+        )
+    return deal_sl, deal_tp, sl_ok and tp_ok
+
+
+def max_lot_by_single_position_rule(symbol: str, market_price: float, sl: float) -> float:
+    equity = reference_equity_for_risk_cap()
+    if equity <= 0.0 or PROP_MAX_SINGLE_POSITION_LOSS_PCT <= 0.0 or mt5 is None:
+        return 0.0
+    info = mt5.symbol_info(symbol)
+    if info is None:
+        return 0.0
+    tick_size = info.trade_tick_size or info.point
+    tick_value = info.trade_tick_value
+    if tick_size <= 0 or tick_value <= 0:
+        return 0.0
+    sl_distance = abs(market_price - sl)
+    if sl_distance <= 0:
+        return 0.0
+    loss_per_lot = (sl_distance / tick_size) * tick_value
+    if loss_per_lot <= 0:
+        return 0.0
+    max_loss_usd = equity * PROP_MAX_SINGLE_POSITION_LOSS_PCT / 100.0
+    return normalize_lot(symbol, max_loss_usd / loss_per_lot)
+
+
+def symbol_hard_lot_cap(symbol: str) -> float:
+    canonical = normalize_pair_name(symbol) or ""
+    if canonical == "XAUUSD":
+        return PROP_MAX_LOT_XAUUSD
+    return PROP_MAX_LOT_FX
+
+
+def resolve_execution_lot(
+    symbol: str,
+    risk_budget: float,
+    market_price: float,
+    sl: float,
+    python_lot: float,
+) -> float:
+    calc_lot = lot_from_risk_budget_mt5(symbol, risk_budget, market_price, sl) if risk_budget > 0 else 0.0
+    py_lot = normalize_lot(symbol, python_lot) if python_lot > 0 else 0.0
+    if py_lot > 0 and calc_lot > 0:
+        lot = min(py_lot, calc_lot)
+    elif py_lot > 0:
+        lot = py_lot
+    else:
+        lot = calc_lot
+    if py_lot > 0 and calc_lot > 0 and py_lot > calc_lot * 4.0:
+        lot = calc_lot
+    cap_rule = max_lot_by_single_position_rule(symbol, market_price, sl)
+    cap_symbol = symbol_hard_lot_cap(symbol)
+    if cap_rule > 0 and lot > cap_rule:
+        lot = cap_rule
+    if cap_symbol > 0 and lot > cap_symbol:
+        lot = cap_symbol
+    return normalize_lot(symbol, lot)
+
+
+def lot_from_risk_budget(risk_budget: float, sl_distance: float, pair: str | None = None) -> float:
+    return lot_from_risk_budget_pair(risk_budget, sl_distance, pair=pair)
+
+
 def lot_from_risk_budget_mt5(
     symbol: str,
     risk_budget: float,
@@ -69,7 +200,7 @@ def lot_from_risk_budget_mt5(
     """
     if mt5 is None:
         sl_distance = abs(entry - sl)
-        return lot_from_risk_budget(risk_budget, sl_distance)
+        return lot_from_risk_budget_pair(risk_budget, sl_distance)
 
     info = mt5.symbol_info(symbol)
     if info is None:
@@ -82,7 +213,7 @@ def lot_from_risk_budget_mt5(
     tick_size = info.trade_tick_size or info.point
     tick_value = info.trade_tick_value
     if tick_size <= 0 or tick_value <= 0:
-        return lot_from_risk_budget(risk_budget, sl_distance)
+        return lot_from_risk_budget_pair(risk_budget, sl_distance)
 
     ticks_at_risk = sl_distance / tick_size
     loss_per_lot = ticks_at_risk * tick_value
@@ -145,27 +276,13 @@ def execute_trade(
             message=f"Failed to select symbol: {symbol}",
         )
 
-    lot = lot_override if lot_override and lot_override > 0 else lot_from_risk_budget_mt5(
-        symbol, risk_budget, entry, sl
-    )
-    if lot <= 0:
-        return TradeExecutionResult(
-            success=False,
-            action=action,
-            symbol=symbol,
-            lot=0.0,
-            ticket=0,
-            risk_budget=risk_budget,
-            message="Calculated lot is zero",
-        )
-
     tick = mt5.symbol_info_tick(symbol)
     if tick is None:
         return TradeExecutionResult(
             success=False,
             action=action,
             symbol=symbol,
-            lot=lot,
+            lot=0.0,
             ticket=0,
             risk_budget=risk_budget,
             message="No tick data",
@@ -174,14 +291,39 @@ def execute_trade(
     order_type = mt5.ORDER_TYPE_BUY if action == "BUY" else mt5.ORDER_TYPE_SELL
     price = tick.ask if action == "BUY" else tick.bid
 
+    deal_sl, deal_tp, stops_ok = adjust_stops_for_deal(symbol, action, price, sl, tp)
+    if not stops_ok:
+        return TradeExecutionResult(
+            success=False,
+            action=action,
+            symbol=symbol,
+            lot=0.0,
+            ticket=0,
+            risk_budget=risk_budget,
+            message="Invalid stops after broker min-distance adjust",
+        )
+
+    py_lot = lot_override if lot_override and lot_override > 0 else 0.0
+    lot = resolve_execution_lot(symbol, risk_budget, price, deal_sl, py_lot)
+    if lot <= 0:
+        return TradeExecutionResult(
+            success=False,
+            action=action,
+            symbol=symbol,
+            lot=0.0,
+            ticket=0,
+            risk_budget=risk_budget,
+            message="Calculated lot is zero after risk caps",
+        )
+
     request: dict[str, Any] = {
         "action": mt5.TRADE_ACTION_DEAL,
         "symbol": symbol,
         "volume": lot,
         "type": order_type,
         "price": price,
-        "sl": sl,
-        "tp": tp,
+        "sl": deal_sl,
+        "tp": deal_tp,
         "deviation": deviation,
         "magic": magic,
         "comment": comment,
@@ -342,7 +484,7 @@ def execute_trade_from_signal(
         magic=magic,
         comment=str(signal.get("trade_id", "PropEA_L45")),
         mt5_path=mt5_path,
-        lot_override=lot_override if risk_budget <= 0 else None,
+        lot_override=lot_override if lot_override > 0 else None,
     )
     if result.success and signal.get("setup_type") == "CSPA" and signal.get("exit_mode") == "CSPA_BE_TRAIL":
         register_cspa_exit_tracker(broker_symbol, magic, signal)
@@ -410,12 +552,37 @@ def modify_position_sl(
             message="SL unchanged",
         )
 
+    direction = "BUY" if pos.type == mt5.POSITION_TYPE_BUY else "SELL"
+    tick = mt5.symbol_info_tick(symbol)
+    if tick is None:
+        return TradeExecutionResult(
+            success=False,
+            action="MODIFY_SL",
+            symbol=symbol,
+            lot=float(pos.volume),
+            ticket=ticket,
+            risk_budget=0.0,
+            message="No tick data",
+        )
+    market_price = tick.bid if direction == "BUY" else tick.ask
+    deal_sl, deal_tp, stops_ok = adjust_stops_for_deal(symbol, direction, market_price, norm_sl, norm_tp)
+    if not stops_ok:
+        return TradeExecutionResult(
+            success=False,
+            action="MODIFY_SL",
+            symbol=symbol,
+            lot=float(pos.volume),
+            ticket=ticket,
+            risk_budget=0.0,
+            message="Invalid stops after broker min-distance adjust",
+        )
+
     request = {
         "action": mt5.TRADE_ACTION_SLTP,
         "position": ticket,
         "symbol": symbol,
-        "sl": norm_sl,
-        "tp": norm_tp,
+        "sl": deal_sl,
+        "tp": deal_tp,
         "magic": magic,
     }
     result = mt5.order_send(request)
@@ -569,18 +736,40 @@ def place_pyramid_limit(
 
     lot = normalize_lot(symbol, lot)
     norm_price = _normalize_price(symbol, limit_price)
-    norm_sl = _normalize_price(symbol, sl)
-    norm_tp = _normalize_price(symbol, tp)
+    deal_sl = sl
+    deal_tp = tp
+    deal_lot = lot
+    if not adjust_stops_for_deal(symbol, direction, norm_price, deal_sl, deal_tp)[2]:
+        return TradeExecutionResult(
+            success=False,
+            action="PYRAMID_LIMIT",
+            symbol=symbol,
+            lot=lot,
+            ticket=0,
+            risk_budget=0.0,
+            message="Invalid stops after broker min-distance adjust",
+        )
+    deal_lot = resolve_execution_lot(symbol, 0.0, norm_price, deal_sl, deal_lot)
+    if deal_lot <= 0:
+        return TradeExecutionResult(
+            success=False,
+            action="PYRAMID_LIMIT",
+            symbol=symbol,
+            lot=0.0,
+            ticket=0,
+            risk_budget=0.0,
+            message="Lot zero after risk caps",
+        )
     order_type = mt5.ORDER_TYPE_BUY_LIMIT if direction == "BUY" else mt5.ORDER_TYPE_SELL_LIMIT
 
     request: dict[str, Any] = {
         "action": mt5.TRADE_ACTION_PENDING,
         "symbol": symbol,
-        "volume": lot,
+        "volume": deal_lot,
         "type": order_type,
         "price": norm_price,
-        "sl": norm_sl,
-        "tp": norm_tp,
+        "sl": deal_sl,
+        "tp": deal_tp,
         "deviation": deviation,
         "magic": magic,
         "comment": comment[:31],
@@ -593,7 +782,7 @@ def place_pyramid_limit(
             success=False,
             action="PYRAMID_LIMIT",
             symbol=symbol,
-            lot=lot,
+            lot=deal_lot,
             ticket=0,
             risk_budget=0.0,
             message=f"limit order_send None: {mt5.last_error()}",
@@ -603,7 +792,7 @@ def place_pyramid_limit(
         success=success,
         action="PYRAMID_LIMIT",
         symbol=symbol,
-        lot=lot,
+        lot=deal_lot,
         ticket=int(result.order or 0),
         risk_budget=0.0,
         message=result.comment or ("OK" if success else "Limit order failed"),

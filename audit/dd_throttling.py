@@ -177,6 +177,8 @@ def apply_dynamic_dd_throttling(
     base_risk_pct: float,
     drawdown_pct: float,
     consecutive_losses: int = 0,
+    *,
+    pair: str | None = None,
 ) -> tuple[float, float, float, float, str | None]:
     """Position Sizing Layer: DD tier + 連敗に応じて lot_factor / lot_size を縮小。"""
     from audit.risk_manager import apply_lot_factor_floor, lot_from_risk_budget
@@ -184,13 +186,13 @@ def apply_dynamic_dd_throttling(
     throttle_mult, tag = resolve_dd_throttle_tier(drawdown_pct, consecutive_losses)
     if throttle_mult >= 1.0 or lot_factor <= 0.0:
         risk_budget = round(equity * base_risk_pct * lot_factor, 2)
-        lot_size = lot_from_risk_budget(risk_budget, sl_distance, lot_factor)
+        lot_size = lot_from_risk_budget(risk_budget, sl_distance, lot_factor, pair=pair)
         return lot_factor, risk_budget, lot_size, throttle_mult, None
 
     lot_factor = round(lot_factor * throttle_mult, 4)
     lot_factor = apply_lot_factor_floor(lot_factor)
     risk_budget = round(equity * base_risk_pct * lot_factor, 2)
-    lot_size = lot_from_risk_budget(risk_budget, sl_distance, lot_factor)
+    lot_size = lot_from_risk_budget(risk_budget, sl_distance, lot_factor, pair=pair)
     return lot_factor, risk_budget, lot_size, throttle_mult, tag
 
 
@@ -200,6 +202,8 @@ def apply_recovery_boost(
     sl_distance: float,
     base_risk_pct: float,
     recovery_boost_armed: bool,
+    *,
+    pair: str | None = None,
 ) -> tuple[float, float, float, float, str | None]:
     """
     連勝後の次トレード1回のみ lot をブースト（V字回復加速）。
@@ -210,12 +214,12 @@ def apply_recovery_boost(
 
     if not is_recovery_boost_enabled() or not recovery_boost_armed or lot_factor <= 0.0:
         risk_budget = round(equity * base_risk_pct * lot_factor, 2)
-        lot_size = lot_from_risk_budget(risk_budget, sl_distance, lot_factor)
+        lot_size = lot_from_risk_budget(risk_budget, sl_distance, lot_factor, pair=pair)
         return lot_factor, risk_budget, lot_size, 1.0, None
 
     boost_mult = recovery_boost_mult()
     lot_factor = round(lot_factor * boost_mult, 4)
     lot_factor = apply_lot_factor_floor(lot_factor)
     risk_budget = round(equity * base_risk_pct * lot_factor, 2)
-    lot_size = lot_from_risk_budget(risk_budget, sl_distance, lot_factor)
+    lot_size = lot_from_risk_budget(risk_budget, sl_distance, lot_factor, pair=pair)
     return lot_factor, risk_budget, lot_size, boost_mult, REASON_RECOVERY_BOOST

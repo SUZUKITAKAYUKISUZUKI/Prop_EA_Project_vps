@@ -16,7 +16,9 @@ import pandas as pd
 
 from audit.broker_costs import apply_commission_sl_floor, min_net_profit_sl
 
-PIP_SIZE = 0.0001
+from strategies.market_utils import pip_size_for_pair
+
+PIP_SIZE = 0.0001  # legacy default for tests/logs without symbol context
 LSFC_SETUP_TYPE = "LONDON_SWEEP_FAILURE_CONTINUATION"
 ALS_SETUP_TYPE = "ASIAN_SESSION_LIQUIDITY_SWEEP"
 FVG_SETUP_TYPE = "FVG_FILL"
@@ -395,7 +397,8 @@ class PyramidManager:
         denom = self.base_risk * self.initial_lot
         profit_r = total_pnl_price / denom if denom > 0 else 0.0
         profit_r = max(-1.0, min(2.4, profit_r))
-        profit_pips = total_pnl_price / (self.initial_lot * PIP_SIZE) if self.initial_lot > 0 else 0.0
+        pip_size = pip_size_for_pair(self.symbol) if self.symbol else PIP_SIZE
+        profit_pips = total_pnl_price / (self.initial_lot * pip_size) if self.initial_lot > 0 else 0.0
         result = "WIN" if profit_r > 0 else "LOSS"
         return result, profit_r, profit_pips
 
@@ -434,12 +437,9 @@ def empty_pyramid_result(
 
 
 def _pyramid_be_trigger_r(setup_type: str | None = None) -> float:
-    try:
-        from live_pyramid.config import resolve_live_pyramid_trigger_r
-
-        return resolve_live_pyramid_trigger_r(setup_type)
-    except Exception:
-        return 1.0
+    """Backtest pyramid BE threshold (fixed 1R; matches can_add_pyramid)."""
+    _ = setup_type
+    return 1.0
 
 
 def pyramid_result_to_record_fields(result: PyramidTradeResult) -> dict[str, Any]:

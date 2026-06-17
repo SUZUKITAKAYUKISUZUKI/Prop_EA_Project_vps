@@ -46,13 +46,16 @@ def lookup_ohlcv(obj: Any) -> OhlcvArrays | None:
 
 
 def as_ohlcv(obj: Any) -> OhlcvArrays:
+    if isinstance(obj, BtOhlcvFrame):
+        return obj.arrays
+    if isinstance(obj, OhlcvArrays):
+        return obj
     found = lookup_ohlcv(obj)
     if found is not None:
         return found
     if isinstance(obj, pd.DataFrame):
-        arr = OhlcvArrays.from_prepared_df(obj)
-        register_ohlcv(obj, arr)
-        return arr
+        # Do not cache mutable DataFrames — id() reuse causes stale OHLCV in long test runs.
+        return OhlcvArrays.from_prepared_df(obj)
     raise TypeError(f"expected BtOhlcvFrame, OhlcvArrays, or DataFrame, got {type(obj)!r}")
 
 

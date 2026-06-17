@@ -5,6 +5,8 @@
 #ifndef CSPA_EXIT_MANAGER_MQH
 #define CSPA_EXIT_MANAGER_MQH
 
+#include "PropEA_TradeExecution.mqh"
+
 #define CSPA_EXIT_MAX_TRACKS 16
 #define FINTOKEI_COMMISSION_RT_USD 6.0
 #define FINTOKEI_MIN_NET_PROFIT_USD 0.50
@@ -143,6 +145,12 @@ bool CspaExit_ModifySl(
 
    double norm_sl = CspaExit_NormalizePrice(symbol, new_sl);
    double norm_tp = CspaExit_NormalizePrice(symbol, tp);
+   long pos_type = PositionGetInteger(POSITION_TYPE);
+   if(!PropEA_AdjustSlTpForPosition(symbol, pos_type, norm_sl, norm_tp, true))
+   {
+      Print("CspaExit skip ModifySL — invalid stops after broker adjust ticket=", ticket);
+      return false;
+   }
 
    MqlTradeRequest request;
    MqlTradeResult  result;

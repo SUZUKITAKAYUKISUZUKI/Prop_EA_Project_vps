@@ -17,10 +17,16 @@ input bool   InpSendCorrelatedPair  = true;        // SMT/CORRELATION用に相�
 
 input bool   InpPyramidLiveEnabled    = true;        // Live Limit ピラミッド (Python /pyramid/*)
 
+input double InpMaxSinglePositionLossPct = 3.0;     // Fintokei 1ポジション最大損失 (%)
+input double InpPropReferenceEquity      = 0.0;     // 0=口座Equity, >0 で固定基準 (例: 100000)
+input double InpMaxLotXAUUSD             = 0.50;    // XAUUSD ハード上限 lot
+input double InpMaxLotFX                 = 2.00;    // FX ハード上限 lot
+
+#include "PropEA_WebRequestLock.mqh"
+#include "PropEA_TradeExecution.mqh"
 #include "LiveSentinel.mqh"
 #include "CspaExitManager.mqh"
 #include "DbbsExitManager.mqh"
-#include "PropEA_WebRequestLock.mqh"
 #include "PyramidLiveManager.mqh"
 
 string g_correlated_symbol = "";
@@ -101,29 +107,6 @@ string WebRequestStatusHint(const int status, const int err_code)
       return "WebRequest err=" + IntegerToString(err_code);
    return "HTTP status=" + IntegerToString(status);
 }
-string CanonicalPair(const string symbol)
-{
-   string upper = symbol;
-   StringToUpper(upper);
-   StringReplace(upper, ".", "");
-   StringReplace(upper, "_", "");
-   StringReplace(upper, "-", "");
-   StringReplace(upper, " ", "");
-
-   // Longest-first — keep in sync with strategies/market_utils.py LIVE_CANONICAL_PAIRS
-   string pairs[] = {
-      "EURGBP", "GBPUSD", "USDCAD", "AUDNZD", "EURUSD",
-      "AUDUSD", "NZDUSD", "XAUUSD", "USDJPY", "AUDJPY"
-   };
-   for(int i = 0; i < ArraySize(pairs); i++)
-   {
-      if(StringFind(upper, pairs[i]) == 0)
-         return pairs[i];
-   }
-   return upper;
-}
-
-//+------------------------------------------------------------------+
 long MaxSpreadForSymbol(const string symbol)
 {
    string canonical = CanonicalPair(symbol);
@@ -145,20 +128,6 @@ int WebRequestTimeoutMs(const string symbol)
    return (int)MathMin(ms, 90000);
 }
 
-//+------------------------------------------------------------------+
-int PairRequestStaggerMs(const string symbol)
-{
-   string canonical = CanonicalPair(symbol);
-   string order[] = {"EURUSD", "GBPUSD", "XAUUSD", "USDCAD", "AUDNZD", "EURGBP", "NZDUSD"};
-   for(int i = 0; i < ArraySize(order); i++)
-   {
-      if(canonical == order[i])
-         return i * 1200;
-   }
-   return 0;
-}
-
-//+------------------------------------------------------------------+
 string ExtractPairSuffix(const string symbol, const string canonical)
 {
    string upper = symbol;
@@ -462,30 +431,42 @@ bool ExtractJsonDouble(const string json, const string key, double &value)
 //+------------------------------------------------------------------+
 bool BridgeHealthCheck()
 {
-   if(!PropEA_TryAcquireWebRequestLock())
-      return false;
+   for(int attempt = 0; attempt < 8; attempt++)
+   {
+      if(!PropEA_TryAcquireWebRequestLock())
+      {
+         Sleep(300);
+         continue;
+      }
 
-   char post[];
-   char result[];
-   string result_headers;
-   ArrayResize(post, 0);
-   string headers = "Content-Type: application/json\r\n";
-   string url = BridgeHealthUrl();
-   int status = WebRequest("GET", url, headers, 5000, post, result, result_headers);
-   PropEA_ReleaseWebRequestLock();
-   if(status == 200)
-      return true;
-   Print("Bridge health check failed. ", WebRequestStatusHint(status, GetLastError()),
-         " url=", url);
+      char post[];
+      char result[];
+      string result_headers;
+      ArrayResize(post, 0);
+      string headers = "Content-Type: application/json\r\n";
+      string url = BridgeHealthUrl();
+      int status = WebRequest("GET", url, headers, 5000, post, result, result_headers);
+      PropEA_ReleaseWebRequestLock();
+      if(status == 200)
+         return true;
+      Print("Bridge health check failed. ", WebRequestStatusHint(status, GetLastError()),
+            " url=", url);
+      return false;
+   }
    return false;
 }
 
 //+------------------------------------------------------------------+
 bool PostTradeSignal(const string body, string &response)
 {
-   if(!PropEA_TryAcquireWebRequestLock())
+   int stagger_ms = PropEA_PairRequestStaggerMs(_Symbol);
+   if(stagger_ms > 0)
+      Sleep(stagger_ms);
+
+   int wait_ms = WebRequestTimeoutMs(_Symbol) + stagger_ms + 15000;
+   if(!PropEA_WaitAcquireWebRequestLock(wait_ms))
    {
-      Print("PostTradeSignal skipped — WebRequest busy (another chart or re-entrant call)");
+      Print("PostTradeSignal deferred — WebRequest queue timeout (", wait_ms, "ms) symbol=", _Symbol);
       return false;
    }
 
@@ -497,15 +478,27 @@ bool PostTradeSignal(const string body, string &response)
 
    string headers = "Content-Type: application/json\r\n";
    int timeout_ms = WebRequestTimeoutMs(_Symbol);
-   int status = WebRequest(
-      "POST",
-      InpApiUrl,
-      headers,
-      timeout_ms,
-      post,
-      result,
-      result_headers
-   );
+   int status = -1;
+   for(int attempt = 0; attempt < 5; attempt++)
+   {
+      status = WebRequest(
+         "POST",
+         InpApiUrl,
+         headers,
+         timeout_ms,
+         post,
+         result,
+         result_headers
+      );
+      if(status == 200)
+         break;
+      if(status == 1003 && attempt < 4)
+      {
+         Sleep(500);
+         continue;
+      }
+      break;
+   }
    PropEA_ReleaseWebRequestLock();
 
    if(status == -1)
@@ -514,6 +507,11 @@ bool PostTradeSignal(const string body, string &response)
       Print("WebRequest failed. ", WebRequestStatusHint(status, err),
             " url=", InpApiUrl);
       g_http_fail_streak++;
+      return false;
+   }
+   if(status == 1003)
+   {
+      Print("PostTradeSignal busy(1003) after retries — symbol=", _Symbol, " (next bar/timer retry)");
       return false;
    }
    if(status != 200)
@@ -556,117 +554,6 @@ ENUM_ORDER_TYPE_FILLING ResolveFillingMode(const string symbol)
 }
 
 //+------------------------------------------------------------------+
-double NormalizeLot(const string symbol, const double lot)
-{
-   double min_lot = SymbolInfoDouble(symbol, SYMBOL_VOLUME_MIN);
-   double max_lot = SymbolInfoDouble(symbol, SYMBOL_VOLUME_MAX);
-   double step    = SymbolInfoDouble(symbol, SYMBOL_VOLUME_STEP);
-   if(step <= 0.0)
-      step = 0.01;
-   double out = MathMax(min_lot, MathMin(max_lot, lot));
-   out = MathFloor(out / step) * step;
-   return out;
-}
-
-//+------------------------------------------------------------------+
-double NormalizeTradePrice(const string symbol, const double price)
-{
-   int digits = (int)SymbolInfoInteger(symbol, SYMBOL_DIGITS);
-   return NormalizeDouble(price, digits);
-}
-
-//+------------------------------------------------------------------+
-bool AdjustStopsForDeal(
-   const string symbol,
-   const string action,
-   const double market_price,
-   double &sl,
-   double &tp,
-   const bool log_adjustments
-)
-{
-   double point = SymbolInfoDouble(symbol, SYMBOL_POINT);
-   if(point <= 0.0)
-      point = 0.00001;
-
-   int stops_level = (int)SymbolInfoInteger(symbol, SYMBOL_TRADE_STOPS_LEVEL);
-   double min_dist = (stops_level + 2) * point;
-
-   double orig_sl = sl;
-   double orig_tp = tp;
-   sl = NormalizeTradePrice(symbol, sl);
-   tp = NormalizeTradePrice(symbol, tp);
-
-   if(action == "BUY")
-   {
-      if(sl > 0.0)
-      {
-         if(sl >= market_price || (market_price - sl) < min_dist)
-            sl = NormalizeTradePrice(symbol, market_price - min_dist);
-      }
-      if(tp > 0.0)
-      {
-         if(tp <= market_price || (tp - market_price) < min_dist)
-            tp = NormalizeTradePrice(symbol, market_price + min_dist);
-      }
-   }
-   else if(action == "SELL")
-   {
-      if(sl > 0.0)
-      {
-         if(sl <= market_price || (sl - market_price) < min_dist)
-            sl = NormalizeTradePrice(symbol, market_price + min_dist);
-      }
-      if(tp > 0.0)
-      {
-         if(tp >= market_price || (market_price - tp) < min_dist)
-            tp = NormalizeTradePrice(symbol, market_price - min_dist);
-      }
-   }
-
-   if(log_adjustments && (MathAbs(sl - orig_sl) > point * 0.5 || MathAbs(tp - orig_tp) > point * 0.5))
-   {
-      Print(
-         "execute_trade adjusted stops for broker min distance (stops_level=",
-         stops_level,
-         " point=", DoubleToString(point, (int)SymbolInfoInteger(symbol, SYMBOL_DIGITS)),
-         ") sl ", DoubleToString(orig_sl, (int)SymbolInfoInteger(symbol, SYMBOL_DIGITS)),
-         "->", DoubleToString(sl, (int)SymbolInfoInteger(symbol, SYMBOL_DIGITS)),
-         " tp ", DoubleToString(orig_tp, (int)SymbolInfoInteger(symbol, SYMBOL_DIGITS)),
-         "->", DoubleToString(tp, (int)SymbolInfoInteger(symbol, SYMBOL_DIGITS)),
-         " market=", DoubleToString(market_price, (int)SymbolInfoInteger(symbol, SYMBOL_DIGITS))
-      );
-   }
-   return (sl > 0.0 || tp > 0.0);
-}
-
-//+------------------------------------------------------------------+
-double CalcLotFromRiskBudget(
-   const string symbol,
-   const double risk_budget,
-   const double entry,
-   const double sl
-)
-{
-   // L4.5: lot = risk_budget / (SL距離[ticks] × tick_value)
-   if(risk_budget <= 0.0)
-      return 0.0;
-   double sl_distance = MathAbs(entry - sl);
-   if(sl_distance <= 0.0)
-      return 0.0;
-
-   double tick_size = SymbolInfoDouble(symbol, SYMBOL_TRADE_TICK_SIZE);
-   double tick_value = SymbolInfoDouble(symbol, SYMBOL_TRADE_TICK_VALUE);
-   if(tick_size <= 0.0 || tick_value <= 0.0)
-      return 0.0;
-
-   double loss_per_lot = (sl_distance / tick_size) * tick_value;
-   if(loss_per_lot <= 0.0)
-      return 0.0;
-   return NormalizeLot(symbol, risk_budget / loss_per_lot);
-}
-
-//+------------------------------------------------------------------+
 bool execute_trade(
    const string symbol,
    const string action,
@@ -699,14 +586,7 @@ bool execute_trade(
       return false;
    }
 
-   double lot = CalcLotFromRiskBudget(symbol, risk_budget, entry, sl);
-   if(lot <= 0.0 && lot_fallback > 0.0)
-      lot = NormalizeLot(symbol, lot_fallback);
-   if(lot <= 0.0)
-   {
-      Print("execute_trade skip - lot is zero (risk_budget=", risk_budget, ")");
-      return false;
-   }
+   double lot = 0.0;
 
    MqlTradeRequest request;
    MqlTradeResult  result;
@@ -715,7 +595,6 @@ bool execute_trade(
 
    request.action       = TRADE_ACTION_DEAL;
    request.symbol       = symbol;
-   request.volume       = lot;
    request.type         = (action == "BUY") ? ORDER_TYPE_BUY : ORDER_TYPE_SELL;
    request.price        = (action == "BUY")
       ? SymbolInfoDouble(symbol, SYMBOL_ASK)
@@ -727,7 +606,17 @@ bool execute_trade(
 
    double deal_sl = sl;
    double deal_tp = tp;
-   AdjustStopsForDeal(symbol, action, request.price, deal_sl, deal_tp, true);
+   if(!AdjustStopsForDeal(symbol, action, request.price, deal_sl, deal_tp, true))
+      return false;
+
+   lot = ResolveExecutionLot(symbol, risk_budget, request.price, deal_sl, lot_fallback);
+   if(lot <= 0.0)
+   {
+      Print("execute_trade skip - lot is zero after risk caps (risk_budget=", risk_budget, ")");
+      return false;
+   }
+
+   request.volume = lot;
    request.sl = deal_sl;
    request.tp = deal_tp;
 
@@ -997,10 +886,16 @@ int OnInit()
       SymbolSelect(g_correlated_symbol, true);
 
    PyramidLive_SetApiBaseFromTradeUrl(InpApiUrl);
+   PropEA_ConfigureTradeExecution(
+      InpMaxSinglePositionLossPct,
+      InpPropReferenceEquity,
+      InpMaxLotXAUUSD,
+      InpMaxLotFX
+   );
+   int init_stagger_ms = PropEA_PairRequestStaggerMs(_Symbol);
+   if(init_stagger_ms > 0)
+      Sleep(init_stagger_ms);
    EventSetTimer(InpTimerSeconds);
-   int stagger_ms = PairRequestStaggerMs(_Symbol);
-   if(stagger_ms > 0)
-      Sleep(stagger_ms);
    Print("PropEA_Bridge initialized. API=", InpApiUrl, " corr=", g_correlated_symbol,
          " tf=", EnumToString(BarTimeframeForSymbol(_Symbol)),
          " history=", EffectiveHistoryBars(_Symbol),
@@ -1008,7 +903,7 @@ int OnInit()
          " http_timeout_ms=", WebRequestTimeoutMs(_Symbol),
          " pyramid_live=", (InpPyramidLiveEnabled ? "on" : "off"));
    if(!BridgeHealthCheck())
-      Print("WARNING: Bridge /health unreachable — EA は残りますが trade_signal は失敗します。");
+      Print("WARNING: Bridge /health not confirmed at init (WebRequest busy or Bridge down — will retry on signal)");
    return INIT_SUCCEEDED;
 }
 

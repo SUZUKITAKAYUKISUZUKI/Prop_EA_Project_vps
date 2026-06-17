@@ -1294,12 +1294,11 @@ def _compute_cspa_excursions_fixed_sl(
     return compute_trade_excursions_np(
         as_ohlcv(pair_df),
         start_index,
-        direction,
         entry,
         stop_loss,
         take_profit,
-        initial_risk,
         max_holding_bars=max_holding_bars,
+        direction=direction,
     )
 
 

@@ -6,6 +6,7 @@
 #define PYRAMID_LIVE_MANAGER_MQH
 
 #include "PropEA_WebRequestLock.mqh"
+#include "PropEA_TradeExecution.mqh"
 
 #define PYRAMID_LIVE_MAX_TRACKS 8
 
@@ -51,8 +52,16 @@ string PyramidLive_ApiUrl(const string path)
 //+------------------------------------------------------------------+
 bool PyramidLive_PostJson(const string url, const string body, string &response)
 {
-   if(!PropEA_TryAcquireWebRequestLock())
+   int stagger_ms = PropEA_PairRequestStaggerMs(_Symbol);
+   if(stagger_ms > 0)
+      Sleep(stagger_ms);
+
+   int wait_ms = 15000 + stagger_ms + 5000;
+   if(!PropEA_WaitAcquireWebRequestLock(wait_ms))
+   {
+      Print("PyramidLive_PostJson deferred — WebRequest queue timeout (", wait_ms, "ms)");
       return false;
+   }
 
    char post[];
    char result[];
@@ -62,15 +71,27 @@ bool PyramidLive_PostJson(const string url, const string body, string &response)
 
    string headers = "Content-Type: application/json\r\n";
    int timeout_ms = 5000;
-   int status = WebRequest(
-      "POST",
-      url,
-      headers,
-      timeout_ms,
-      post,
-      result,
-      result_headers
-   );
+   int status = -1;
+   for(int attempt = 0; attempt < 3; attempt++)
+   {
+      status = WebRequest(
+         "POST",
+         url,
+         headers,
+         timeout_ms,
+         post,
+         result,
+         result_headers
+      );
+      if(status == 200 || status == 409)
+         break;
+      if(status == 1003 && attempt < 2)
+      {
+         Sleep(400);
+         continue;
+      }
+      break;
+   }
    PropEA_ReleaseWebRequestLock();
 
    if(status == -1)
@@ -265,6 +286,15 @@ bool PyramidLive_ModifySl(
    if(MathAbs(new_sl - cur_sl) < point * 0.5)
       return true;
 
+   double deal_sl = new_sl;
+   double deal_tp = tp;
+   long pos_type = PositionGetInteger(POSITION_TYPE);
+   if(!PropEA_AdjustSlTpForPosition(symbol, pos_type, deal_sl, deal_tp, true))
+   {
+      Print("PyramidLive skip ModifySL — invalid stops ticket=", ticket);
+      return false;
+   }
+
    MqlTradeRequest request;
    MqlTradeResult  result;
    ZeroMemory(request);
@@ -273,8 +303,8 @@ bool PyramidLive_ModifySl(
    request.action   = TRADE_ACTION_SLTP;
    request.position = ticket;
    request.symbol   = symbol;
-   request.sl       = PyramidLive_NormalizePrice(symbol, new_sl);
-   request.tp       = PyramidLive_NormalizePrice(symbol, tp);
+   request.sl       = PyramidLive_NormalizePrice(symbol, deal_sl);
+   request.tp       = PyramidLive_NormalizePrice(symbol, deal_tp);
    request.magic    = PositionGetInteger(POSITION_MAGIC);
 
    if(!OrderSend(request, result))
@@ -336,6 +366,12 @@ bool PyramidLive_PlaceLimit(
    if(lot <= 0.0 || limit_price <= 0.0)
       return false;
 
+   double deal_sl = sl;
+   double deal_tp = tp;
+   double deal_lot = lot;
+   if(!PropEA_PrepareOrderVolumeStops(symbol, direction, limit_price, deal_sl, deal_tp, deal_lot, 0.0, true))
+      return false;
+
    MqlTradeRequest request;
    MqlTradeResult  result;
    ZeroMemory(request);
@@ -343,11 +379,11 @@ bool PyramidLive_PlaceLimit(
 
    request.action    = TRADE_ACTION_PENDING;
    request.symbol    = symbol;
-   request.volume    = lot;
+   request.volume    = deal_lot;
    request.type      = (direction == "BUY") ? ORDER_TYPE_BUY_LIMIT : ORDER_TYPE_SELL_LIMIT;
    request.price     = PyramidLive_NormalizePrice(symbol, limit_price);
-   request.sl        = PyramidLive_NormalizePrice(symbol, sl);
-   request.tp        = PyramidLive_NormalizePrice(symbol, tp);
+   request.sl        = deal_sl;
+   request.tp        = deal_tp;
    request.deviation = 20;
    request.magic     = magic;
    request.comment   = comment;
@@ -373,7 +409,7 @@ bool PyramidLive_PlaceLimit(
    }
 
    order_ticket = result.order;
-   Print("PyramidLive Limit placed ticket=", order_ticket, " price=", limit_price, " lot=", lot);
+   Print("PyramidLive Limit placed ticket=", order_ticket, " price=", limit_price, " lot=", deal_lot);
    return true;
 }
 
@@ -588,6 +624,15 @@ bool PyramidLive_ExecuteSingleAction(
          track.pending_order_ticket = 0;
       }
       string comment = StringFormat("PropEA_PYR_%s_L%d", StringSubstr(group_id, 0, 12), layer_index);
+      double market_price = (direction == "BUY")
+         ? SymbolInfoDouble(symbol, SYMBOL_ASK)
+         : SymbolInfoDouble(symbol, SYMBOL_BID);
+      double deal_sl = sl;
+      double deal_tp = tp;
+      double deal_lot = lot_size;
+      if(!PropEA_PrepareOrderVolumeStops(symbol, direction, market_price, deal_sl, deal_tp, deal_lot, 0.0, true))
+         return false;
+
       MqlTradeRequest request;
       MqlTradeResult  result;
       ZeroMemory(request);
@@ -595,13 +640,11 @@ bool PyramidLive_ExecuteSingleAction(
 
       request.action    = TRADE_ACTION_DEAL;
       request.symbol    = symbol;
-      request.volume    = lot_size;
+      request.volume    = deal_lot;
       request.type      = (direction == "BUY") ? ORDER_TYPE_BUY : ORDER_TYPE_SELL;
-      request.price     = (direction == "BUY")
-         ? SymbolInfoDouble(symbol, SYMBOL_ASK)
-         : SymbolInfoDouble(symbol, SYMBOL_BID);
-      request.sl        = PyramidLive_NormalizePrice(symbol, sl);
-      request.tp        = PyramidLive_NormalizePrice(symbol, tp);
+      request.price     = market_price;
+      request.sl        = deal_sl;
+      request.tp        = deal_tp;
       request.deviation = 20;
       request.magic     = magic;
       request.comment   = comment;

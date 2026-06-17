@@ -125,6 +125,8 @@ def apply_profit_cushion_brake(
     base_risk_pct: float,
     phase_start_equity: float,
     profile: str = "challenge",
+    *,
+    pair: str | None = None,
 ) -> tuple[float, float, float, float]:
     """
     利益クッション未達時に lot_factor を縮小し RiskBudget / LotSize を再計算。
@@ -136,13 +138,13 @@ def apply_profit_cushion_brake(
     )
     if cushion_mult >= 1.0 or lot_factor <= 0.0:
         risk_budget = round(equity * base_risk_pct * lot_factor, 2)
-        lot_size = lot_from_risk_budget(risk_budget, sl_distance, lot_factor)
+        lot_size = lot_from_risk_budget(risk_budget, sl_distance, lot_factor, pair=pair)
         return lot_factor, risk_budget, lot_size, cushion_mult
 
     lot_factor = round(lot_factor * cushion_mult, 4)
     lot_factor = apply_lot_factor_floor(lot_factor)
     risk_budget = round(equity * base_risk_pct * lot_factor, 2)
-    lot_size = lot_from_risk_budget(risk_budget, sl_distance, lot_factor)
+    lot_size = lot_from_risk_budget(risk_budget, sl_distance, lot_factor, pair=pair)
     return lot_factor, risk_budget, lot_size, cushion_mult
 
 
@@ -327,6 +329,8 @@ def apply_confidence_lot_scaling_with_mult(
     equity: float,
     sl_distance: float,
     base_risk_pct: float,
+    *,
+    pair: str | None = None,
 ) -> tuple[float, float, float, float]:
     """L4.5: 明示的 confidence 倍率を lot_factor に適用。"""
     if confidence_mult <= 0.0:
@@ -335,7 +339,7 @@ def apply_confidence_lot_scaling_with_mult(
     lot_factor = round(lot_factor * confidence_mult, 4)
     lot_factor = apply_lot_factor_floor(lot_factor)
     risk_budget = round(equity * base_risk_pct * lot_factor, 2)
-    lot_size = lot_from_risk_budget(risk_budget, sl_distance, lot_factor)
+    lot_size = lot_from_risk_budget(risk_budget, sl_distance, lot_factor, pair=pair)
     return lot_factor, risk_budget, lot_size, confidence_mult
 
 
@@ -345,6 +349,8 @@ def apply_confidence_lot_scaling(
     equity: float,
     sl_distance: float,
     base_risk_pct: float,
+    *,
+    pair: str | None = None,
 ) -> tuple[float, float, float, float]:
     """
     L4.5 六連動乗算後に confidence 倍率を適用し RiskBudget / LotSize を再計算。
@@ -358,6 +364,7 @@ def apply_confidence_lot_scaling(
         equity,
         sl_distance,
         base_risk_pct,
+        pair=pair,
     )
 
 
@@ -574,6 +581,9 @@ def finalize_lot_factor_for_execution(
     equity: float,
     daily_committed_risk_pct: float,
     max_loss_r: float = 1.0,
+    pair: str | None = None,
+    phase_start_equity: float | None = None,
+    skip_daily_exposure: bool = False,
 ) -> tuple[float, float, float, list[str], bool]:
     """
     Apply regulatory lot_factor caps (daily exposure + Fintokei 3%) and recompute size.
@@ -586,7 +596,7 @@ def finalize_lot_factor_for_execution(
         return 0.0, 0.0, 0.0, tags, False
 
     trade_risk_pct = compute_trade_risk_pct(base_risk_pct, lot_factor)
-    if trade_risk_pct > 0.0:
+    if not skip_daily_exposure and trade_risk_pct > 0.0:
         remaining = MAX_DAILY_EXPOSURE_LIMIT_PCT - daily_committed_risk_pct
         if remaining <= 0.0 or trade_risk_pct > remaining:
             capped_lf, was_capped = cap_lot_factor_to_daily_exposure(
@@ -615,7 +625,24 @@ def finalize_lot_factor_for_execution(
 
     lot_factor = apply_lot_factor_floor(lot_factor)
     risk_budget = round(equity * base_risk_pct * lot_factor, 2)
-    lot_size = lot_from_risk_budget(risk_budget, sl_distance, lot_factor)
+    lot_size = lot_from_risk_budget(risk_budget, sl_distance, lot_factor, pair=pair)
+    if pair and lot_size > 0.0:
+        capped_lot, was_lot_capped = cap_lot_size_to_max_loss_pct(
+            lot_size,
+            pair=pair,
+            sl_distance=sl_distance,
+            equity=equity,
+            reference_equity=phase_start_equity,
+        )
+        if was_lot_capped:
+            lot_size = capped_lot
+            risk_budget = risk_budget_from_lot_size(
+                lot_size, sl_distance, lot_factor, pair=pair
+            )
+            if REASON_FINTOKEI_SINGLE_POSITION_CAP not in tags:
+                tags.append(REASON_FINTOKEI_SINGLE_POSITION_CAP)
+            if lot_size <= 0.0:
+                return 0.0, 0.0, 0.0, tags, True
     return lot_factor, risk_budget, lot_size, tags, False
 
 
@@ -670,16 +697,82 @@ def lot_from_risk_budget(
     risk_budget: float,
     sl_distance: float,
     lot_factor: float = 1.0,
-    pip_size: float = PIP_SIZE,
-    pip_value_per_lot: float = PIP_VALUE_PER_LOT,
+    pip_size: float | None = None,
+    pip_value_per_lot: float | None = None,
+    *,
+    pair: str | None = None,
 ) -> float:
     if sl_distance <= 0 or lot_factor <= 0 or risk_budget <= 0:
         return 0.0
+    if pair is not None:
+        from strategies.market_utils import pip_size_for_pair, pip_value_per_lot_for_pair
+
+        if pip_size is None:
+            pip_size = pip_size_for_pair(pair)
+        if pip_value_per_lot is None:
+            pip_value_per_lot = pip_value_per_lot_for_pair(pair)
+    if pip_size is None:
+        pip_size = PIP_SIZE
+    if pip_value_per_lot is None:
+        pip_value_per_lot = PIP_VALUE_PER_LOT
     pips_at_risk = sl_distance / pip_size
     if pips_at_risk <= 0:
         return 0.0
     lot_size = risk_budget / (pips_at_risk * pip_value_per_lot)
     return round(lot_size, 4)
+
+
+def risk_budget_from_lot_size(
+    lot_size: float,
+    sl_distance: float,
+    lot_factor: float = 1.0,
+    *,
+    pair: str | None = None,
+) -> float:
+    """Inverse of lot_from_risk_budget — keep JSON risk_budget aligned with capped lot_size."""
+    if lot_size <= 0.0 or sl_distance <= 0.0 or lot_factor <= 0.0:
+        return 0.0
+    if pair is not None:
+        from strategies.market_utils import pip_size_for_pair, pip_value_per_lot_for_pair
+
+        pip_size = pip_size_for_pair(pair)
+        pip_value_per_lot = pip_value_per_lot_for_pair(pair)
+    else:
+        pip_size = PIP_SIZE
+        pip_value_per_lot = PIP_VALUE_PER_LOT
+    pips_at_risk = sl_distance / pip_size
+    if pips_at_risk <= 0:
+        return 0.0
+    return round(lot_size * pips_at_risk * pip_value_per_lot, 2)
+
+
+def cap_lot_size_to_max_loss_pct(
+    lot_size: float,
+    *,
+    pair: str,
+    sl_distance: float,
+    equity: float,
+    limit_pct: float | None = None,
+    reference_equity: float | None = None,
+) -> tuple[float, bool]:
+    """Cap lot so worst-case 1R loss at SL <= limit_pct of reference equity."""
+    if lot_size <= 0.0 or sl_distance <= 0.0 or equity <= 0.0:
+        return lot_size, False
+    from strategies.market_utils import pip_size_for_pair, pip_value_per_lot_for_pair
+
+    limit = fintokei_single_position_loss_limit_pct() if limit_pct is None else limit_pct
+    ref = reference_equity if reference_equity and reference_equity > 0 else equity
+    max_loss_usd = ref * (limit / 100.0)
+    pips = sl_distance / pip_size_for_pair(pair)
+    if pips <= 0:
+        return lot_size, False
+    loss_per_lot = pips * pip_value_per_lot_for_pair(pair)
+    if loss_per_lot <= 0:
+        return lot_size, False
+    max_lot = max_loss_usd / loss_per_lot
+    if lot_size <= max_lot:
+        return lot_size, False
+    return round(max(0.0, max_lot), 4), True
 
 
 def calc_position_size(
@@ -697,6 +790,7 @@ def calc_position_size(
     *,
     skip_portfolio_multiplier: bool = False,
     skip_defense_sizing: bool = False,
+    pair: str | None = None,
 ) -> tuple[float, float, float]:
     """RiskBudget, LotSize, lot_factor を返す。"""
     if skip_defense_sizing:
@@ -714,7 +808,7 @@ def calc_position_size(
             lot_factor = apply_portfolio_lot_multiplier(lot_factor)
     lot_factor = apply_lot_factor_floor(lot_factor)
     risk_budget = round(equity * base_risk_pct * lot_factor, 2)
-    lot_size = lot_from_risk_budget(risk_budget, sl_distance, lot_factor)
+    lot_size = lot_from_risk_budget(risk_budget, sl_distance, lot_factor, pair=pair)
     return risk_budget, lot_size, lot_factor
 
 
@@ -724,6 +818,8 @@ def apply_daily_dd_brake(
     sl_distance: float,
     base_risk_pct: float,
     daily_loss_pct: float = 0.0,
+    *,
+    pair: str | None = None,
 ) -> tuple[float, float, float]:
     """日次DDテーパリング: multiplier_daily_dd で lot_factor を連続縮小。"""
     m_daily = multiplier_daily_dd(daily_loss_pct)
@@ -731,7 +827,7 @@ def apply_daily_dd_brake(
     lot_factor = apply_portfolio_lot_multiplier(lot_factor)
     lot_factor = apply_lot_factor_floor(lot_factor)
     risk_budget = round(equity * base_risk_pct * lot_factor, 2)
-    lot_size = lot_from_risk_budget(risk_budget, sl_distance, lot_factor)
+    lot_size = lot_from_risk_budget(risk_budget, sl_distance, lot_factor, pair=pair)
     return risk_budget, lot_size, lot_factor
 
 

@@ -195,6 +195,7 @@ def apply_twin_brake_to_lot_factor(
     *,
     initial_balance: float = STARTING_EQUITY,
     daily_dd_remaining_percent: float = FINTOKEI_DAILY_DD_LIMIT_PCT,
+    pair: str | None = None,
 ) -> tuple[float, float, float, TwinBrakeBreakdown]:
     """
     既存 lot_factor に Twin Brake 倍率を乗算し RiskBudget / LotSize を再計算。
@@ -208,12 +209,12 @@ def apply_twin_brake_to_lot_factor(
     )
     if not is_twin_brake_enabled() or lot_factor <= 0.0:
         risk_budget = round(current_equity * base_risk_pct * lot_factor, 2)
-        lot_size = lot_from_risk_budget(risk_budget, sl_distance, lot_factor)
+        lot_size = lot_from_risk_budget(risk_budget, sl_distance, lot_factor, pair=pair)
         return lot_factor, risk_budget, lot_size, breakdown
 
     if breakdown.final_lot_multiplier >= 1.0:
         risk_budget = round(current_equity * base_risk_pct * lot_factor, 2)
-        lot_size = lot_from_risk_budget(risk_budget, sl_distance, lot_factor)
+        lot_size = lot_from_risk_budget(risk_budget, sl_distance, lot_factor, pair=pair)
         return lot_factor, risk_budget, lot_size, breakdown
 
     if breakdown.final_lot_multiplier <= 0.0:
@@ -222,5 +223,5 @@ def apply_twin_brake_to_lot_factor(
     lot_factor = round(lot_factor * breakdown.final_lot_multiplier, 4)
     lot_factor = apply_lot_factor_floor(lot_factor)
     risk_budget = round(current_equity * base_risk_pct * lot_factor, 2)
-    lot_size = lot_from_risk_budget(risk_budget, sl_distance, lot_factor)
+    lot_size = lot_from_risk_budget(risk_budget, sl_distance, lot_factor, pair=pair)
     return lot_factor, risk_budget, lot_size, breakdown

@@ -320,11 +320,6 @@ CREATE TABLE IF NOT EXISTS schema_meta (
     value TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );
-
-CREATE INDEX IF NOT EXISTS idx_runs_source ON runs(source);
-CREATE INDEX IF NOT EXISTS idx_trades_source ON trades(source);
-CREATE INDEX IF NOT EXISTS idx_features_source ON features(source);
-CREATE INDEX IF NOT EXISTS idx_trade_events_source ON trade_events(source);
 """
 
 MARKET_DDL = """

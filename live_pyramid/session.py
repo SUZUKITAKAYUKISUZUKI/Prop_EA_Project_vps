@@ -53,6 +53,8 @@ class LivePyramidSession:
     trigger_r: float = LIVE_PYRAMID_TRIGGER_R
     ws_mode: bool = False
     closed: bool = False
+    equity: float = 0.0
+    phase_start_equity: float = 0.0
     stats_limit_placed: int = 0
     stats_limit_filled: int = 0
     stats_limit_cancelled: int = 0
@@ -89,6 +91,8 @@ def create_live_pyramid_session(
     pyramid_group_id: str | None = None,
     tick_size: float = 0.0,
     tick_value: float = 0.0,
+    equity: float = 0.0,
+    phase_start_equity: float = 0.0,
 ) -> LivePyramidSession:
     base_risk = abs(entry - sl)
     safe_atr = max(atr, base_risk * 0.01) if base_risk > 0 else atr
@@ -122,6 +126,8 @@ def create_live_pyramid_session(
         trigger_r=trigger_r if trigger_r is not None else resolve_live_pyramid_trigger_r(setup_type),
         kalman_velocity_at_entry=kalman_velocity_at_entry,
         ws_mode=ws_mode,
+        equity=equity,
+        phase_start_equity=phase_start_equity,
     )
 
 

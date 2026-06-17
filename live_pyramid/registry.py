@@ -43,6 +43,8 @@ class LivePyramidRegistry:
         pyramid_group_id: str | None = None,
         tick_size: float = 0.0,
         tick_value: float = 0.0,
+        equity: float = 0.0,
+        phase_start_equity: float = 0.0,
     ) -> LivePyramidSession:
         if not is_live_pyramid_enabled(setup_type):
             raise RuntimeError(f"live pyramid disabled for setup_type={setup_type}")
@@ -68,6 +70,8 @@ class LivePyramidRegistry:
             pyramid_group_id=pyramid_group_id,
             tick_size=tick_size,
             tick_value=tick_value,
+            equity=equity,
+            phase_start_equity=phase_start_equity,
         )
         return self.register(session)
 

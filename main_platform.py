@@ -1080,6 +1080,7 @@ class PendingEvaluation:
     trade_risk_pct: float
     minutes_to_news: int
     start_idx: int
+    phase_start_equity: float = 0.0
     llm_confidence_score: int = 0
     llm_reason_summary: str = ""
     confidence_lot_multiplier: float = 0.0
@@ -1575,6 +1576,7 @@ def calc_position_size(
     *,
     skip_portfolio_multiplier: bool = False,
     skip_defense_sizing: bool = False,
+    pair: str | None = None,
 ) -> tuple[float, float, float]:
     acct = account or AccountState(profile=PROP_FIRM_PROFILE)
     if skip_defense_sizing:
@@ -1595,6 +1597,7 @@ def calc_position_size(
         acct.profile,
         skip_portfolio_multiplier=skip_portfolio_multiplier,
         skip_defense_sizing=skip_defense_sizing,
+        pair=pair,
     )
 
 
@@ -1604,11 +1607,13 @@ def apply_daily_dd_brake(
     sl_distance: float,
     daily_loss_pct: float = 0.0,
     account: AccountState | None = None,
+    *,
+    pair: str | None = None,
 ) -> tuple[float, float, float]:
     acct = account or AccountState(profile=PROP_FIRM_PROFILE)
     base_risk = acct.resolved_base_risk_pct()
     return audit_rm.apply_daily_dd_brake(
-        lot_factor, equity, sl_distance, base_risk, daily_loss_pct
+        lot_factor, equity, sl_distance, base_risk, daily_loss_pct, pair=pair
     )
 
 
@@ -1831,6 +1836,7 @@ def _build_l0_exposure_reject_pending(
         gbp_s=gbp_s,
         eur_s=eur_s,
         equity_before=equity_snapshot,
+        phase_start_equity=account.phase_start_equity,
         daily_rem=daily_rem,
         monthly_rem=monthly_rem,
         smt=0.0,
@@ -1882,6 +1888,7 @@ def _build_daily_stop_reject_pending(
         gbp_s=gbp_s,
         eur_s=eur_s,
         equity_before=equity_snapshot,
+        phase_start_equity=account.phase_start_equity,
         daily_rem=daily_rem,
         monthly_rem=monthly_rem,
         smt=0.0,
@@ -1935,6 +1942,7 @@ def _build_lgr_prop_filter_reject_pending(
         gbp_s=gbp_s,
         eur_s=eur_s,
         equity_before=equity_snapshot,
+        phase_start_equity=account.phase_start_equity,
         daily_rem=daily_rem,
         monthly_rem=monthly_rem,
         smt=0.0,
@@ -1991,6 +1999,7 @@ def _build_mutual_exclusion_reject_pending(
         gbp_s=gbp_s,
         eur_s=eur_s,
         equity_before=equity_snapshot,
+        phase_start_equity=account.phase_start_equity,
         daily_rem=daily_rem,
         monthly_rem=monthly_rem,
         smt=0.0,
@@ -2566,12 +2575,13 @@ def _evaluate_setup_at_timestamp(
         account,
         skip_portfolio_multiplier=defense_pure,
         skip_defense_sizing=defense_pure,
+        pair=setup.pair,
     )
     daily_loss_pct = daily_loss_fraction * 100.0
     m_daily = multiplier_daily_dd(daily_loss_pct)
     if m_daily < 1.0 and not defense_pure:
         risk_budget, lot_size, lot_factor = apply_daily_dd_brake(
-            lot_factor, equity_snapshot, sl_distance, daily_loss_pct, account
+            lot_factor, equity_snapshot, sl_distance, daily_loss_pct, account, pair=setup.pair
         )
         if "DAILY_DD_BRAKE" not in tags:
             tags.append("DAILY_DD_BRAKE")
@@ -2586,6 +2596,7 @@ def _evaluate_setup_at_timestamp(
             equity_snapshot,
             sl_distance,
             base_risk_pct,
+            pair=setup.pair,
         )
         if confidence_lot_multiplier <= 0.0:
             decision_source = "REJECT_BY_LLM"
@@ -2603,6 +2614,7 @@ def _evaluate_setup_at_timestamp(
             equity_snapshot,
             sl_distance,
             base_risk_pct,
+            pair=setup.pair,
         )
         if confidence_lot_multiplier <= 0.0:
             decision_source = "REJECT_BY_RISK_SCALE"
@@ -2618,6 +2630,7 @@ def _evaluate_setup_at_timestamp(
             equity_snapshot,
             sl_distance,
             base_risk_pct,
+            pair=setup.pair,
         )
         if confidence_lot_multiplier <= 0.0:
             decision_source = "REJECT_BY_LLM"
@@ -2635,6 +2648,7 @@ def _evaluate_setup_at_timestamp(
             base_risk_pct,
             account.phase_start_equity,
             account.profile,
+            pair=setup.pair,
         )
         if cushion_mult < 1.0 and "PROFIT_CUSHION_BRAKE" not in tags:
             tags.append(audit_rm.REASON_PROFIT_CUSHION_BRAKE)
@@ -2647,6 +2661,7 @@ def _evaluate_setup_at_timestamp(
             base_risk_pct,
             initial_balance=account.phase_start_equity,
             daily_dd_remaining_percent=daily_rem,
+            pair=setup.pair,
         )
         for tag in audit_twin_brake.twin_brake_reason_tags(twin_bd):
             if tag not in tags:
@@ -2664,7 +2679,7 @@ def _evaluate_setup_at_timestamp(
         lot_factor = audit_rm.apply_lot_factor_floor(lot_factor)
         risk_budget = round(equity_snapshot * base_risk_pct * lot_factor, 2)
         lot_size = audit_rm.lot_from_risk_budget(
-            risk_budget, sl_distance, lot_factor
+            risk_budget, sl_distance, lot_factor, pair=setup.pair
         )
     elif not is_reject:
         risk_budget = 0.0
@@ -2680,6 +2695,7 @@ def _evaluate_setup_at_timestamp(
                 base_risk_pct,
                 dd_pct,
                 consecutive_losses=streak_snapshot,
+                pair=setup.pair,
             )
         )
         if dd_tag and dd_tag not in tags:
@@ -2693,6 +2709,7 @@ def _evaluate_setup_at_timestamp(
                 sl_distance,
                 base_risk_pct,
                 recovery_boost_armed=True,
+                pair=setup.pair,
             )
         )
         account.recovery_boost_armed = False
@@ -2710,7 +2727,7 @@ def _evaluate_setup_at_timestamp(
         lot_factor = audit_rm.apply_lot_factor_floor(lot_factor)
         risk_budget = round(equity_snapshot * base_risk_pct * lot_factor, 2)
         lot_size = audit_rm.lot_from_risk_budget(
-            risk_budget, sl_distance, lot_factor
+            risk_budget, sl_distance, lot_factor, pair=setup.pair
         )
         fvg_final_lot_factor = lot_factor
     elif setup_type == FVG_FILL_SETUP_TYPE and lot_factor > 0.0 and not is_reject:
@@ -2731,7 +2748,7 @@ def _evaluate_setup_at_timestamp(
             base_risk_pct = account.resolved_base_risk_pct()
             risk_budget = round(equity_snapshot * base_risk_pct * lot_factor, 2)
             lot_size = audit_rm.lot_from_risk_budget(
-                risk_budget, sl_distance, lot_factor
+                risk_budget, sl_distance, lot_factor, pair=setup.pair
             )
         gate_tag = cspa_gate_reason.split(":")[0] if cspa_gate_reason else "CSPA_BAYES"
         if gate_tag and gate_tag not in tags:
@@ -2756,7 +2773,7 @@ def _evaluate_setup_at_timestamp(
         base_risk_pct = account.resolved_base_risk_pct()
         risk_budget = round(equity_snapshot * base_risk_pct * lot_factor, 2)
         lot_size = audit_rm.lot_from_risk_budget(
-            risk_budget, sl_distance, lot_factor
+            risk_budget, sl_distance, lot_factor, pair=setup.pair
         )
         if "LGR_EV_SIZING" not in tags:
             tags.append("LGR_EV_SIZING")
@@ -2793,7 +2810,7 @@ def _evaluate_setup_at_timestamp(
         base_risk_pct = account.resolved_base_risk_pct()
         risk_budget = round(equity_snapshot * base_risk_pct * lot_factor, 2)
         lot_size = audit_rm.lot_from_risk_budget(
-            risk_budget, sl_distance, lot_factor
+            risk_budget, sl_distance, lot_factor, pair=setup.pair
         )
         if "TTM_EV_SIZING" not in tags:
             tags.append("TTM_EV_SIZING")
@@ -2835,7 +2852,7 @@ def _evaluate_setup_at_timestamp(
         base_risk_pct = account.resolved_base_risk_pct()
         risk_budget = round(equity_snapshot * base_risk_pct * lot_factor, 2)
         lot_size = audit_rm.lot_from_risk_budget(
-            risk_budget, sl_distance, lot_factor
+            risk_budget, sl_distance, lot_factor, pair=setup.pair
         )
         if "VAMR_MODEL_B_SIZING" not in tags:
             tags.append("VAMR_MODEL_B_SIZING")
@@ -2852,7 +2869,7 @@ def _evaluate_setup_at_timestamp(
         base_risk_pct = account.resolved_base_risk_pct()
         risk_budget = round(equity_snapshot * base_risk_pct * lot_factor, 2)
         lot_size = audit_rm.lot_from_risk_budget(
-            risk_budget, sl_distance, lot_factor
+            risk_budget, sl_distance, lot_factor, pair=setup.pair
         )
         if "SMRS_MODEL_A_SIZING" not in tags:
             tags.append("SMRS_MODEL_A_SIZING")
@@ -2895,7 +2912,7 @@ def _evaluate_setup_at_timestamp(
         base_risk_pct = dn_prop_gate_base_risk_frac()
         risk_budget = round(equity_snapshot * base_risk_pct * lot_factor, 2)
         lot_size = audit_rm.lot_from_risk_budget(
-            risk_budget, sl_distance, lot_factor
+            risk_budget, sl_distance, lot_factor, pair=setup.pair
         )
         if "DN_PROP_GATE" not in tags:
             tags.append("DN_PROP_GATE")
@@ -2932,13 +2949,13 @@ def _evaluate_setup_at_timestamp(
             base_risk_pct = account.resolved_base_risk_pct()
             risk_budget = round(equity_snapshot * base_risk_pct * lot_factor, 2)
             lot_size = audit_rm.lot_from_risk_budget(
-                risk_budget, sl_distance, lot_factor
+                risk_budget, sl_distance, lot_factor, pair=setup.pair
             )
             if "DBBS_EDGE_RISK" not in tags:
                 tags.append("DBBS_EDGE_RISK")
 
     trade_risk_pct = compute_trade_risk_pct(base_risk_pct, lot_factor)
-    if not is_reject and trade_risk_pct > 0.0 and not defense_pure:
+    if not is_reject and trade_risk_pct > 0.0:
         lot_factor, risk_budget, lot_size, cap_tags, reject_l0 = (
             audit_rm.finalize_lot_factor_for_execution(
                 lot_factor,
@@ -2947,6 +2964,9 @@ def _evaluate_setup_at_timestamp(
                 equity=equity_snapshot,
                 daily_committed_risk_pct=account.daily_committed_risk_pct,
                 max_loss_r=1.0,
+                pair=setup.pair,
+                phase_start_equity=account.phase_start_equity,
+                skip_daily_exposure=defense_pure,
             )
         )
         for tag in cap_tags:
@@ -2963,7 +2983,7 @@ def _evaluate_setup_at_timestamp(
         else:
             trade_risk_pct = compute_trade_risk_pct(base_risk_pct, lot_factor)
 
-    if not is_reject and lot_size > 0.0 and lot_factor > 0.0:
+    if not is_reject and lot_size > 0.0 and lot_factor > 0.0 and not defense_pure:
         account.commit_daily_risk(trade_risk_pct)
         if lgr_baseline:
             from archive.lgr.lgr_prop_controls import lgr_max_open_positions
@@ -2999,6 +3019,7 @@ def _evaluate_setup_at_timestamp(
         gbp_s=gbp_s,
         eur_s=eur_s,
         equity_before=equity_snapshot,
+        phase_start_equity=account.phase_start_equity,
         daily_rem=daily_rem,
         monthly_rem=monthly_rem,
         smt=smt,
@@ -4138,10 +4159,30 @@ def pending_to_trade_signal(pending: PendingEvaluation) -> dict[str, Any]:
     from strategies import STRATEGY_LETTER_BY_SETUP_TYPE
 
     strategy_letter = STRATEGY_LETTER_BY_SETUP_TYPE.get(pending.setup_type, "")
+    sl_distance = abs(float(setup.entry_price) - float(setup.stop_loss))
+    lot_size_out = float(pending.lot_size) if action in ("BUY", "SELL") else 0.0
+    risk_budget_out = float(pending.risk_budget) if action in ("BUY", "SELL") else 0.0
+    ref_equity = pending.phase_start_equity if pending.phase_start_equity > 0 else pending.equity_before
+    if action in ("BUY", "SELL") and lot_size_out > 0.0 and sl_distance > 0.0:
+        capped_lot, was_capped = audit_rm.cap_lot_size_to_max_loss_pct(
+            lot_size_out,
+            pair=setup.pair,
+            sl_distance=sl_distance,
+            equity=float(pending.equity_before),
+            reference_equity=float(ref_equity),
+        )
+        if was_capped:
+            lot_size_out = capped_lot
+            risk_budget_out = audit_rm.risk_budget_from_lot_size(
+                lot_size_out,
+                sl_distance,
+                float(pending.lot_factor),
+                pair=setup.pair,
+            )
     signal = {
         "action": action,
-        "lot_size": float(pending.lot_size) if action in ("BUY", "SELL") else 0.0,
-        "risk_budget": float(pending.risk_budget) if action in ("BUY", "SELL") else 0.0,
+        "lot_size": lot_size_out,
+        "risk_budget": risk_budget_out,
         "sl": float(round(setup.stop_loss, 5)),
         "tp": float(round(tp_price, 5)),
         "entry": float(round(setup.entry_price, 5)),

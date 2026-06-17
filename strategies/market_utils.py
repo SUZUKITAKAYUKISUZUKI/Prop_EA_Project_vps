@@ -61,6 +61,20 @@ def pip_size_for_pair(pair: str) -> float:
     return PIP_SIZE
 
 
+def pip_value_per_lot_for_pair(pair: str, *, default: float = 10.0) -> float:
+    """
+    Live/BT lot_from_risk_budget 用の pip あたり USD 価値（1 lot あたり）。
+
+    XAUUSD は MT5 tick_value≈1 / tick_size=0.01 に合わせ 1.0（FX の 10.0 とは別）。
+    """
+    upper = str(pair).upper()
+    if upper in {"XAUUSD", "GOLD"}:
+        return 1.0
+    if upper.endswith("JPY"):
+        return 8.0
+    return default
+
+
 def normalize_pair_name(raw: str) -> str | None:
     """
     Strip broker-specific suffixes and map to a canonical pair name.
