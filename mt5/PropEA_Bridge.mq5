@@ -4,7 +4,7 @@
 //| MT5: ツール→オプション→エキスパートアドバイザー→WebRequest許可URL |
 //+------------------------------------------------------------------+
 #property copyright "Prop EA Project"
-#property version   "1.02"
+#property version   "1.03"
 
 input string InpApiUrl              = "http://127.0.0.1:8000/trade_signal";
 input int    InpTimerSeconds        = 60;          // シグナル照会間隔（秒）
@@ -34,6 +34,8 @@ datetime g_last_bar_time   = 0;
 datetime g_last_request    = 0;
 int      g_http_fail_streak = 0;
 bool     g_autotrading_warned = false;
+
+#define PROPEA_BRIDGE_HEALTH_GV "PropEA_Bridge_HealthOk"
 
 //+------------------------------------------------------------------+
 void PropEA_CheckAutoTrading()
@@ -429,12 +431,23 @@ bool ExtractJsonDouble(const string json, const string key, double &value)
 }
 
 //+------------------------------------------------------------------+
+bool BridgeHealthConfirmed()
+{
+   return GlobalVariableCheck(PROPEA_BRIDGE_HEALTH_GV) && GlobalVariableGet(PROPEA_BRIDGE_HEALTH_GV) > 0.5;
+}
+
+void BridgeMarkHealthConfirmed()
+{
+   GlobalVariableSet(PROPEA_BRIDGE_HEALTH_GV, 1.0);
+}
+
+//+------------------------------------------------------------------+
 bool BridgeHealthCheck()
 {
-   if(GlobalVariableCheck(PROPEA_WR_OWNER_GV))
-      return false;
+   if(BridgeHealthConfirmed())
+      return true;
 
-   if(!PropEA_TryAcquireWebRequestLock())
+   if(!PropEA_WaitAcquireWebRequestLock(30000))
       return false;
 
    char post[];
@@ -446,10 +459,22 @@ bool BridgeHealthCheck()
    int status = WebRequest("GET", url, headers, 5000, post, result, result_headers);
    PropEA_ReleaseWebRequestLock();
    if(status == 200)
+   {
+      BridgeMarkHealthConfirmed();
       return true;
+   }
    Print("Bridge health check failed. ", WebRequestStatusHint(status, GetLastError()),
          " url=", url);
    return false;
+}
+
+//+------------------------------------------------------------------+
+void MaybeBridgeHealthCheck()
+{
+   if(BridgeHealthConfirmed())
+      return;
+   if(BridgeHealthCheck())
+      Print("Bridge /health OK (", _Symbol, ")");
 }
 
 //+------------------------------------------------------------------+
@@ -517,6 +542,7 @@ bool PostTradeSignal(const string body, string &response)
    }
 
    g_http_fail_streak = 0;
+   BridgeMarkHealthConfirmed();
    response = CharArrayToString(result, 0, WHOLE_ARRAY, CP_UTF8);
    return true;
 }
@@ -890,14 +916,12 @@ int OnInit()
    if(init_stagger_ms > 0)
       Sleep(init_stagger_ms);
    EventSetTimer(InpTimerSeconds);
-   Print("PropEA_Bridge v1.02 initialized. API=", InpApiUrl, " corr=", g_correlated_symbol,
+   Print("PropEA_Bridge v1.03 initialized. API=", InpApiUrl, " corr=", g_correlated_symbol,
          " tf=", EnumToString(BarTimeframeForSymbol(_Symbol)),
          " history=", EffectiveHistoryBars(_Symbol),
          " max_spread=", MaxSpreadForSymbol(_Symbol),
          " http_timeout_ms=", WebRequestTimeoutMs(_Symbol),
          " pyramid_live=", (InpPyramidLiveEnabled ? "on" : "off"));
-   if(!BridgeHealthCheck())
-      Print("WARNING: Bridge /health not confirmed at init (WebRequest busy or Bridge down — will retry on signal)");
    return INIT_SUCCEEDED;
 }
 
@@ -923,6 +947,7 @@ void OnDeinit(const int reason)
 //+------------------------------------------------------------------+
 void OnTimer()
 {
+   MaybeBridgeHealthCheck();
    if(InpPyramidLiveEnabled)
       PyramidLive_ProcessPendingCloses(InpMagic);
    RequestPipelineSignal();

@@ -262,6 +262,22 @@ bool PropEA_TryAcquireWebRequestLock()
 }
 
 //+------------------------------------------------------------------+
+bool PropEA_WaitAcquireWebRequestLock(const int max_wait_ms)
+{
+   int waited = 0;
+   const int step_ms = 250;
+   while(waited < max_wait_ms)
+   {
+      PropEA_ForceReleaseStaleWebRequestLock(PROPEA_WR_LOCK_TTL_SEC);
+      if(PropEA_TryAcquireWebRequestLock())
+         return true;
+      Sleep(step_ms);
+      waited += step_ms;
+   }
+   return false;
+}
+
+//+------------------------------------------------------------------+
 void PropEA_ReleaseWebRequestLock()
 {
    long my_chart = (long)ChartID();
