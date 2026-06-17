@@ -65,25 +65,37 @@ class PFOOResult:
 
 
 def _load_prae_context(artifact_dir: Path) -> dict[str, Any]:
+    from src.repositories.base import normalize_source_path
+    from src.repositories.portfolio_repository import PortfolioRepository
+
     ctx: dict[str, Any] = {}
-    risk_path = artifact_dir / "risk_contribution.csv"
-    if risk_path.exists():
-        df = pd.read_csv(risk_path)
-        ctx["risk_contribution"] = dict(zip(df["Strategy"], df["DD Contribution %"]))
-    marginal_path = artifact_dir / "marginal_contribution.csv"
-    if marginal_path.exists():
-        df = pd.read_csv(marginal_path)
-        ctx["marginal_ranking"] = df.to_dict(orient="records")
-        if not df.empty:
-            ctx["weakest_strategies"] = tuple(
-                df.sort_values("Marginal Score").head(3)["Strategy Removed"].astype(str)
-            )
+    portfolio_repo = PortfolioRepository()
+
+    risk_rel = normalize_source_path(artifact_dir / "risk_contribution.csv")
+    risk_rows = portfolio_repo.get_risk_attribution(source_path=risk_rel)
+    if not risk_rows:
+        risk_rows = portfolio_repo.get_risk_attribution(source_path="backtest_results/prae_v1/risk_contribution.csv")
+    if risk_rows:
+        ctx["risk_contribution"] = {
+            row["strategy"]: row.get("contribution_dd")
+            for row in risk_rows
+            if row.get("contribution_dd") is not None
+        }
+
+    marginal_rel = normalize_source_path(artifact_dir / "marginal_contribution.csv")
+    marginal_rows = portfolio_repo.get_risk_attribution(source_path=marginal_rel)
+    if marginal_rows:
+        ctx["marginal_ranking"] = marginal_rows
+        ctx["weakest_strategies"] = tuple(row["strategy"] for row in marginal_rows[:3])
     alloc_path = artifact_dir / "recommended_allocation.json"
     if alloc_path.exists():
         ctx["prae_allocation"] = json.loads(alloc_path.read_text(encoding="utf-8"))
-    corr_path = artifact_dir / "correlation_matrix.csv"
-    if corr_path.exists():
-        ctx["correlation"] = pd.read_csv(corr_path, index_col=0)
+    from src.services.portfolio_service import PortfolioService
+
+    portfolio_svc = PortfolioService(portfolio_repo=portfolio_repo)
+    ctx["correlation"] = portfolio_svc.correlation_matrix(
+        source_path="backtest_results/main_abcd_3y.csv"
+    )
     return ctx
 
 

@@ -25,6 +25,7 @@ from feature_engineering import (
     LivePipelineState,
     TIMEFRAME_LABEL,
     evaluate_trade_signal,
+    evaluate_trade_signal_with_pending,
 )
 from audit.live_sentinel import evaluate_live_sentinel, is_live_sentinel_enabled, parse_server_time
 
@@ -342,12 +343,20 @@ async def health() -> dict[str, str]:
 async def trade_signal(request: TradeSignalRequest) -> TradeSignalResponse:
     global _pipeline_state
     try:
-        result = evaluate_trade_signal(_request_to_dict(request), _pipeline_state)
+        payload = _request_to_dict(request)
+        result, pending = evaluate_trade_signal_with_pending(payload, _pipeline_state)
     except KeyError as exc:
         raise HTTPException(status_code=422, detail=f"Missing field: {exc}") from exc
     except Exception as exc:
         logger.exception("POST /trade_signal failed: %s", exc)
         raise HTTPException(status_code=500, detail=str(exc)) from exc
+    try:
+        from src.runtime.bridge_event_hooks import log_pet_decision, log_trade_signal_result
+
+        log_trade_signal_result(request, result, pending=pending, payload=payload)
+        log_pet_decision(_pipeline_state.last_pet_decision)
+    except Exception:
+        logger.exception("Trade event logging failed (trade_signal)")
     return TradeSignalResponse(**result)
 
 
@@ -360,6 +369,12 @@ async def dbbs_trade_closed(request: DbbsTradeClosedRequest) -> DbbsTradeClosedR
     snap = get_edge_tracker().pre_trade_snapshot()
     last3 = snap.get("last_3_avg_r")
     last3_out = float(last3) if last3 is not None and str(last3) != "nan" else None
+    try:
+        from src.runtime.bridge_event_hooks import log_dbbs_trade_closed
+
+        log_dbbs_trade_closed(request.result_r, snap)
+    except Exception:
+        logger.exception("Trade event logging failed (dbbs_trade_closed)")
     return DbbsTradeClosedResponse(
         ok=True,
         last_3_avg_r=last3_out,
@@ -384,6 +399,12 @@ async def sentinel_tick(request: SentinelTickRequest) -> SentinelStatusResponse:
         logger.error(verdict.message)
     elif verdict.log_level == "warning":
         logger.warning(verdict.message)
+    try:
+        from src.runtime.bridge_event_hooks import log_sentinel_tick
+
+        log_sentinel_tick(verdict, request)
+    except Exception:
+        logger.exception("Trade event logging failed (sentinel_tick)")
     return SentinelStatusResponse(
         enabled=is_live_sentinel_enabled(),
         entry_allowed=verdict.entry_allowed,
@@ -406,6 +427,34 @@ async def sentinel_status() -> dict[str, Any]:
         "enabled": is_live_sentinel_enabled(),
         "state": _pipeline_state.sentinel.to_dict(),
     }
+
+
+@app.get("/api/trade_events/summary", response_model=dict[str, Any])
+async def trade_events_summary() -> dict[str, Any]:
+    from src.api.trade_events_api import get_trade_event_summary
+
+    return get_trade_event_summary()
+
+
+@app.get("/api/trade_events/recent", response_model=list[dict[str, Any]])
+async def trade_events_recent(limit: int = 50) -> list[dict[str, Any]]:
+    from src.api.trade_events_api import get_recent_events
+
+    return get_recent_events(limit=limit)
+
+
+@app.get("/api/trade_events/features/summary", response_model=dict[str, Any])
+async def trade_features_summary(limit: int = 100) -> dict[str, Any]:
+    from src.api.trade_events_api import get_feature_summary
+
+    return get_feature_summary(limit=limit)
+
+
+@app.get("/api/trade_events/features/recent", response_model=list[dict[str, Any]])
+async def trade_features_recent(limit: int = 50) -> list[dict[str, Any]]:
+    from src.api.trade_events_api import get_recent_features
+
+    return get_recent_features(limit=limit)
 
 
 @app.get("/api/runtime/snapshot", response_model=dict[str, Any])
@@ -479,6 +528,12 @@ async def pyramid_register(request: PyramidRegisterRequest) -> PyramidRegisterRe
     from live_pyramid.l6_log import log_pyramid_register
 
     log_pyramid_register(session)
+    try:
+        from src.runtime.bridge_event_hooks import log_pyramid_register
+
+        log_pyramid_register(request, session)
+    except Exception:
+        logger.exception("Trade event logging failed (pyramid_register)")
     return PyramidRegisterResponse(
         trade_id=session.trade_id,
         pyramid_group_id=session.pyramid_group_id,
@@ -520,6 +575,12 @@ async def pyramid_tick(request: PyramidTickRequest) -> PyramidActionResponse:
     from live_pyramid.l6_log import log_pyramid_tick
 
     log_pyramid_tick(session, actions, bar_index=request.bar_index)
+    try:
+        from src.runtime.bridge_event_hooks import log_pyramid_actions
+
+        log_pyramid_actions(session, actions)
+    except Exception:
+        logger.exception("Trade event logging failed (pyramid_tick)")
     return _pyramid_action_response(session, actions)
 
 
@@ -550,6 +611,12 @@ async def pyramid_fill(request: PyramidFillRequest) -> PyramidActionResponse:
         position_ticket=request.position_ticket,
         order_ticket=request.order_ticket,
     )
+    try:
+        from src.runtime.bridge_event_hooks import log_pyramid_actions
+
+        log_pyramid_actions(session, actions)
+    except Exception:
+        logger.exception("Trade event logging failed (pyramid_fill)")
     return _pyramid_action_response(session, actions)
 
 
@@ -567,6 +634,12 @@ async def pyramid_close(request: PyramidCloseRequest) -> PyramidActionResponse:
     from live_pyramid.l6_log import log_pyramid_close
 
     log_pyramid_close(session, actions)
+    try:
+        from src.runtime.bridge_event_hooks import log_pyramid_close
+
+        log_pyramid_close(session, actions)
+    except Exception:
+        logger.exception("Trade event logging failed (pyramid_close)")
     return PyramidActionResponse(
         actions=[a.to_dict() for a in actions],
         pyramid_group_id=session.pyramid_group_id,
