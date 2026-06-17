@@ -6,7 +6,7 @@
 
 double g_prop_max_single_position_loss_pct = 3.0;
 double g_prop_reference_equity             = 0.0;
-double g_prop_max_lot_xauusd               = 0.50;
+double g_prop_max_lot_xauusd               = 0.05;
 double g_prop_max_lot_fx                   = 2.00;
 
 //+------------------------------------------------------------------+
@@ -362,6 +362,53 @@ bool PropEA_AdjustSlTpForPosition(
       ? SymbolInfoDouble(symbol, SYMBOL_BID)
       : SymbolInfoDouble(symbol, SYMBOL_ASK);
    return AdjustStopsForDeal(symbol, action, market, sl, tp, log_adjustments);
+}
+
+//+------------------------------------------------------------------+
+string PropEA_ExtractStrategyLetter(const string comment)
+{
+   if(StringFind(comment, "PropEA_") != 0)
+      return "";
+   if(StringLen(comment) < 8)
+      return "";
+   return StringSubstr(comment, 7, 1);
+}
+
+//+------------------------------------------------------------------+
+bool PropEA_IsPyramidPositionComment(const string comment)
+{
+   return StringFind(comment, "PropEA_PYR_") == 0;
+}
+
+//+------------------------------------------------------------------+
+bool PropEA_HasOpenBasePositionForStrategy(
+   const string symbol,
+   const ulong magic,
+   const string strategy_letter
+)
+{
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   {
+      ulong ticket = PositionGetTicket(i);
+      if(ticket == 0)
+         continue;
+      if(!PositionSelectByTicket(ticket))
+         continue;
+      if(PositionGetString(POSITION_SYMBOL) != symbol)
+         continue;
+      if(PositionGetInteger(POSITION_MAGIC) != (long)magic)
+         continue;
+
+      string comment = PositionGetString(POSITION_COMMENT);
+      if(PropEA_IsPyramidPositionComment(comment))
+         continue;
+      if(strategy_letter == "")
+         return true;
+      if(PropEA_ExtractStrategyLetter(comment) != strategy_letter)
+         continue;
+      return true;
+   }
+   return false;
 }
 
 #endif // PROPEA_TRADE_EXECUTION_MQH

@@ -48,7 +48,8 @@ from __future__ import annotations
 import json
 import os
 import random
-from collections import defaultdict
+import threading
+from collections import Counter, defaultdict
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
@@ -2049,6 +2050,8 @@ def _evaluate_setup_at_timestamp(
     minutes_to_news_override: int | None = None,
     htf_gbp: pd.DataFrame | None = None,
     htf_eur: pd.DataFrame | None = None,
+    defer_daily_risk_commit: bool = False,
+    live_context: bool = False,
 ) -> PendingEvaluation:
     """Phase-1: L0〜L4.5 を同一口座スナップショットで一括判定。
 
@@ -2069,7 +2072,7 @@ def _evaluate_setup_at_timestamp(
     blocked, blocking_type = account.is_blocked_by_mutual_exclusion(
         setup.timestamp, setup.pair, setup_type
     )
-    if blocked and blocking_type is not None and not entry_filter_bypass:
+    if blocked and blocking_type is not None and not (defense_pure and not live_context):
         return _build_mutual_exclusion_reject_pending(
             setup,
             strategy,
@@ -2983,7 +2986,7 @@ def _evaluate_setup_at_timestamp(
         else:
             trade_risk_pct = compute_trade_risk_pct(base_risk_pct, lot_factor)
 
-    if not is_reject and lot_size > 0.0 and lot_factor > 0.0 and not defense_pure:
+    if not is_reject and lot_size > 0.0 and lot_factor > 0.0 and not defense_pure and not defer_daily_risk_commit:
         account.commit_daily_risk(trade_risk_pct)
         if lgr_baseline:
             from archive.lgr.lgr_prop_controls import lgr_max_open_positions
@@ -3706,8 +3709,51 @@ from live_buffer_config import infer_bar_minutes, live_bar_buffer_max, max_sprea
 LIVE_BAR_BUFFER_MAX = 2000  # legacy alias; prefer live_bar_buffer_max(pair)
 BROKER_POSITION_SETUP_TYPE = "BROKER_POSITION"
 BROKER_POSITION_HORIZON = pd.Timedelta(days=365)
+LIVE_SIGNAL_LOCK_MINUTES = int(os.getenv("LIVE_SIGNAL_LOCK_MINUTES", "15"))
 LIVE_EXEC_BAR_MINUTES = 5  # PropEA_Bridge.mq5 uses PERIOD_M5
 _LIVE_BAR_COLUMNS = ("datetime", "open", "high", "low", "close", "volume")
+_live_pair_eval_locks: dict[str, threading.Lock] = {}
+_live_pair_eval_lock_guard = threading.Lock()
+_live_pipeline_eval_lock = threading.RLock()
+
+
+@contextmanager
+def live_pair_eval_lock(pair: str) -> Iterator[None]:
+    """Serialize live evaluation per symbol (prevents concurrent double-entry races)."""
+    canonical = normalize_pair_name(pair) or pair.strip().upper()
+    with _live_pair_eval_lock_guard:
+        if canonical not in _live_pair_eval_locks:
+            _live_pair_eval_locks[canonical] = threading.Lock()
+        lock = _live_pair_eval_locks[canonical]
+    with lock:
+        yield
+
+
+@contextmanager
+def live_pipeline_eval_lock() -> Iterator[None]:
+    """Serialize all LivePipelineState mutations (cross-pair account / open_positions)."""
+    with _live_pipeline_eval_lock:
+        yield
+
+
+def _register_live_execution_lock_if_approved(
+    account: AccountState,
+    server_timestamp: pd.Timestamp,
+    pending: PendingEvaluation,
+    signal: dict[str, Any],
+) -> None:
+    if signal.get("action") not in ("BUY", "SELL"):
+        return
+    if pending.is_reject or pending.lot_size <= 0:
+        return
+    if not audit_rm.is_mutual_exclusion_enabled(pending.setup_type):
+        return
+    account.register_live_signal_lock(
+        server_timestamp,
+        pending.setup.pair,
+        pending.setup_type,
+        LIVE_SIGNAL_LOCK_MINUTES,
+    )
 
 
 def _empty_live_bars() -> pd.DataFrame:
@@ -3807,10 +3853,14 @@ def _detect_setups_for_live_pair(
     if pair not in ("GBPUSD", "EURUSD"):
         return []
 
-    gbp_df, eur_df, h1_gbp, h1_eur = _pair_dataframes(state)
-    if pair == "GBPUSD":
-        return strategy.detect_setups(gbp_df, pair, h1_gbp) if not gbp_df.empty else []
-    return strategy.detect_setups(eur_df, pair, h1_eur) if not eur_df.empty else []
+    from strategies.dinapoli import DiNapoliStrategy
+    from strategies.london_sweep_failure import LondonSweepFailureStrategy
+
+    m15 = resample_to_m15(bars)
+    h1 = resample_to_h1(bars)
+    if isinstance(strategy, (LondonSweepFailureStrategy, DiNapoliStrategy)):
+        return strategy.detect_setups(m15, pair, h1) if not m15.empty else []
+    return strategy.detect_setups(bars, pair, h1) if not bars.empty else []
 
 
 @dataclass
@@ -3922,6 +3972,11 @@ def sync_live_account(
     calendar_ts = server_timestamp if server_timestamp is not None else bar_timestamp
     account.update_calendar(calendar_ts)
     account.equity = float(equity)
+    ref = audit_rm.fintokei_reference_equity(float(equity), account.phase_start_equity)
+    if audit_rm.PROP_REFERENCE_EQUITY > 0.0:
+        account.phase_start_equity = ref
+    elif account.phase_start_equity <= 0.0:
+        account.phase_start_equity = ref
     _ = balance  # Sentinel / 将来の証拠金チェック用
 
 
@@ -3935,18 +3990,22 @@ def sync_broker_open_positions(
 
     各 item は setup_type または strategy_letter (A/B/C) を含むこと。
     不明な場合のみ BROKER_POSITION（当該シンボル全戦略ブロック）として扱う。
+    同一戦略×シンボルに2件以上ある場合のみ BROKER_POSITION へ昇格。
     """
     from strategies import SETUP_TYPE_BY_STRATEGY_LETTER
 
     if not audit_rm.is_mutual_exclusion_enabled():
         return
     account.purge_closed_positions(ts)
+    if broker_positions is None:
+        return
     if not broker_positions:
+        if any(pos.provisional for pos in account.open_positions):
+            return
         account.open_positions.clear()
         return
 
-    synced: list[audit_rm.OpenPosition] = []
-    seen: set[tuple[str, str]] = set()
+    parsed: list[tuple[str, str, pd.Timestamp]] = []
     for item in broker_positions:
         if not isinstance(item, dict):
             continue
@@ -3955,30 +4014,55 @@ def sync_broker_open_positions(
             continue
         setup_type_raw = str(item.get("setup_type") or "").strip()
         letter = str(item.get("strategy_letter") or "").strip().upper()
+        if letter == "P" or setup_type_raw.upper() in ("PYRAMID", "PYRAMID_LAYER"):
+            continue
         if not setup_type_raw and letter:
             setup_type_raw = SETUP_TYPE_BY_STRATEGY_LETTER.get(letter, "")
-        if not setup_type_raw:
-            setup_type = BROKER_POSITION_SETUP_TYPE
-        else:
-            setup_type = setup_type_raw
-        dedupe_key = (pair, setup_type)
-        if dedupe_key in seen:
-            continue
-        seen.add(dedupe_key)
+        setup_type = setup_type_raw or BROKER_POSITION_SETUP_TYPE
         entry_raw = item.get("entry_time") or item.get("entry_ts")
         try:
             entry = pd.Timestamp(entry_raw) if entry_raw else ts
         except (TypeError, ValueError):
             entry = ts
+        parsed.append((pair, setup_type, entry))
+
+    if not parsed:
+        if any(pos.provisional for pos in account.open_positions):
+            return
+        account.open_positions = [pos for pos in account.open_positions if pos.provisional]
+        return
+
+    pair_setup_counts = Counter((pair, setup_type) for pair, setup_type, _ in parsed)
+
+    synced: list[audit_rm.OpenPosition] = []
+    seen: set[tuple[str, str]] = set()
+    broker_keys: set[tuple[str, str]] = set()
+    for pair, setup_type, entry in parsed:
+        effective_setup = setup_type
+        if pair_setup_counts[(pair, setup_type)] >= 2:
+            effective_setup = BROKER_POSITION_SETUP_TYPE
+        dedupe_key = (pair, effective_setup)
+        if dedupe_key in seen:
+            continue
+        seen.add(dedupe_key)
+        broker_keys.add((pair, setup_type))
+        broker_keys.add((pair, effective_setup))
         synced.append(
             audit_rm.OpenPosition(
                 pair=pair,
-                setup_type=setup_type,
+                setup_type=effective_setup,
                 entry_ts=entry,
                 close_ts=ts + BROKER_POSITION_HORIZON,
+                provisional=False,
             )
         )
-    account.open_positions = synced
+
+    provisional_keep = [
+        pos
+        for pos in account.open_positions
+        if pos.provisional and (pos.pair, pos.setup_type) not in broker_keys
+    ]
+    account.open_positions = provisional_keep + synced
 
 
 def _pair_dataframes(
@@ -4027,16 +4111,13 @@ def _find_active_setup(
     pair: str,
     bar_timestamp: pd.Timestamp,
 ) -> SetupUnion | None:
-    """指定ペア・バー時刻に一致する最新セットアップを返す。"""
-    same_day = [
+    """指定ペア・バー時刻に完全一致するセットアップのみ返す（同日再発火防止）。"""
+    exact = [
         s
         for s in setups
-        if s.pair == pair and s.timestamp.normalize() == bar_timestamp.normalize()
+        if s.pair == pair and s.timestamp == bar_timestamp
     ]
-    if not same_day:
-        return None
-    exact = [s for s in same_day if s.timestamp == bar_timestamp]
-    return exact[0] if exact else same_day[-1]
+    return exact[0] if exact else None
 
 
 def evaluate_precomputed_setup(
@@ -4162,16 +4243,15 @@ def pending_to_trade_signal(pending: PendingEvaluation) -> dict[str, Any]:
     sl_distance = abs(float(setup.entry_price) - float(setup.stop_loss))
     lot_size_out = float(pending.lot_size) if action in ("BUY", "SELL") else 0.0
     risk_budget_out = float(pending.risk_budget) if action in ("BUY", "SELL") else 0.0
-    ref_equity = pending.phase_start_equity if pending.phase_start_equity > 0 else pending.equity_before
     if action in ("BUY", "SELL") and lot_size_out > 0.0 and sl_distance > 0.0:
-        capped_lot, was_capped = audit_rm.cap_lot_size_to_max_loss_pct(
+        capped_lot, cap_tags = audit_rm.apply_execution_lot_caps(
             lot_size_out,
             pair=setup.pair,
             sl_distance=sl_distance,
             equity=float(pending.equity_before),
-            reference_equity=float(ref_equity),
+            phase_start_equity=float(pending.phase_start_equity),
         )
-        if was_capped:
+        if capped_lot != lot_size_out or cap_tags:
             lot_size_out = capped_lot
             risk_budget_out = audit_rm.risk_budget_from_lot_size(
                 lot_size_out,
@@ -4179,6 +4259,9 @@ def pending_to_trade_signal(pending: PendingEvaluation) -> dict[str, Any]:
                 float(pending.lot_factor),
                 pair=setup.pair,
             )
+            for tag in cap_tags:
+                if tag not in pending.tags:
+                    pending.tags.append(tag)
     signal = {
         "action": action,
         "lot_size": lot_size_out,
@@ -4283,8 +4366,6 @@ def evaluate_trade_signal_with_pending(
         state = LivePipelineState.create()
 
     market = payload["market"]
-    calendar = payload.get("calendar", {})
-    account_info = payload["account"]
     pair = normalize_pair_name(str(market.get("pair", "")))
     if pair is None:
         raw_pair = str(market.get("pair", "")).upper()
@@ -4299,6 +4380,20 @@ def evaluate_trade_signal_with_pending(
             None,
         )
 
+    with live_pipeline_eval_lock():
+        with live_pair_eval_lock(pair):
+            return _evaluate_trade_signal_with_pending_locked(payload, state, pair)
+
+
+def _evaluate_trade_signal_with_pending_locked(
+    payload: dict[str, Any],
+    state: LivePipelineState,
+    pair: str,
+) -> tuple[dict[str, Any], PendingEvaluation | None]:
+    """Locked live evaluation body (one in-flight eval per canonical pair)."""
+    market = payload["market"]
+    calendar = payload.get("calendar", {})
+    account_info = payload["account"]
     bar_time = payload.get("bar_time")
     primary_bar = market_payload_to_bar(market, bar_time)
     bar_timestamp = pd.Timestamp(primary_bar["time"])
@@ -4347,6 +4442,11 @@ def evaluate_trade_signal_with_pending(
         from core.portfolio_equity_trail import pet_panic_signal
 
         return pet_panic_signal(pet_decision.message), None
+    if pet_decision is not None and pet_decision.disable_new_entries:
+        from core.portfolio_equity_trail import pet_hold_signal
+
+        pet_tags = tuple(getattr(pet_decision, "tags", None) or ("PET", "NO_NEW_ENTRIES"))
+        return pet_hold_signal(pet_decision.message, tags=pet_tags), None
 
     if is_live_sentinel_enabled():
         verdict = evaluate_live_sentinel(
@@ -4467,13 +4567,26 @@ def evaluate_trade_signal_with_pending(
             state.bayes_engine,
             tref_bayes_filter=state.tref_bayes,
             minutes_to_news_override=minutes_to_news,
+            defer_daily_risk_commit=True,
+            live_context=True,
         )
     finally:
         _restore_live_vamr_context(matched_strategy, prev_h1, prev_h4)
     from core.portfolio_equity_trail import apply_pet_to_trade_signal
 
     signal = pending_to_trade_signal(pending)
-    return apply_pet_to_trade_signal(signal, pet_decision), pending
+    signal = apply_pet_to_trade_signal(signal, pet_decision)
+    if signal.get("action") in ("BUY", "SELL"):
+        _register_live_execution_lock_if_approved(
+            state.account, server_timestamp, pending, signal
+        )
+        if (
+            not pending.is_reject
+            and pending.trade_risk_pct > 0.0
+            and not is_defense_pure_setup(pending.setup_type)
+        ):
+            state.account.commit_daily_risk(pending.trade_risk_pct)
+    return signal, pending
 
 
 def evaluate_trade_signal(

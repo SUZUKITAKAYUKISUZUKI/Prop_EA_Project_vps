@@ -18,8 +18,8 @@ input bool   InpSendCorrelatedPair  = true;        // SMT/CORRELATION用に相�
 input bool   InpPyramidLiveEnabled    = true;        // Live Limit ピラミッド (Python /pyramid/*)
 
 input double InpMaxSinglePositionLossPct = 3.0;     // Fintokei 1ポジション最大損失 (%)
-input double InpPropReferenceEquity      = 0.0;     // 0=口座Equity, >0 で固定基準 (例: 100000)
-input double InpMaxLotXAUUSD             = 0.50;    // XAUUSD ハード上限 lot
+input double InpPropReferenceEquity      = 100000.0; // 0=口座Equity, >0 で固定基準 (Fintokei: 100000)
+input double InpMaxLotXAUUSD             = 0.05;    // XAUUSD ハード上限 lot (0=無効, Fintokei3%のみ)
 input double InpMaxLotFX                 = 2.00;    // FX ハード上限 lot
 
 #include "PropEA_WebRequestLock.mqh"
@@ -319,6 +319,9 @@ string BuildOpenPositionsJson()
          continue;
 
       string comment = PositionGetString(POSITION_COMMENT);
+      if(StringFind(comment, "PropEA_PYR_") == 0)
+         continue;
+
       string letter = ExtractStrategyLetterFromComment(comment);
       string setup_type = SetupTypeFromStrategyLetter(letter);
       if(setup_type == "")
@@ -478,7 +481,7 @@ void MaybeBridgeHealthCheck()
 }
 
 //+------------------------------------------------------------------+
-bool PostTradeSignal(const string body, string &response)
+bool PostTradeSignal(const string body, string &response, const bool keep_session = false)
 {
    int timeout_ms = WebRequestTimeoutMs(_Symbol);
    int my_slot = PropEA_RequestSlotIndex(_Symbol);
@@ -518,10 +521,10 @@ bool PostTradeSignal(const string body, string &response)
       }
       break;
    }
-   PropEA_EndWebRequestSession(_Symbol);
 
    if(status == -1)
    {
+      PropEA_EndWebRequestSession(_Symbol);
       int err = GetLastError();
       Print("WebRequest failed. ", WebRequestStatusHint(status, err),
             " url=", InpApiUrl);
@@ -530,16 +533,21 @@ bool PostTradeSignal(const string body, string &response)
    }
    if(status == 1003)
    {
+      PropEA_EndWebRequestSession(_Symbol);
       Print("PostTradeSignal busy(1003) after retries — symbol=", _Symbol, " (next bar/timer retry)");
       return false;
    }
    if(status != 200)
    {
+      PropEA_EndWebRequestSession(_Symbol);
       Print("HTTP status=", status, " body=", CharArrayToString(result),
             " | ", WebRequestStatusHint(status, GetLastError()));
       g_http_fail_streak++;
       return false;
    }
+
+   if(!keep_session)
+      PropEA_EndWebRequestSession(_Symbol);
 
    g_http_fail_streak = 0;
    BridgeMarkHealthConfirmed();
@@ -596,13 +604,22 @@ bool execute_trade(
       return false;
    }
 
-   // L2 per-strategy lock is enforced in Python (MUTUAL_EXCLUSION_ENABLED).
-   // Do not block at symbol level — A+B+C may hold LSFC/DBBS/DiNapoli on the same pair.
+   // L2 per-strategy lock: Python (MUTUAL_EXCLUSION) + EA guard before OrderSend.
 
    long spread = SymbolInfoInteger(symbol, SYMBOL_SPREAD);
    if(spread > max_spread)
    {
       Print("execute_trade skip - spread too wide: ", spread);
+      return false;
+   }
+
+   string strategy_letter = PropEA_ExtractStrategyLetter(comment);
+   if(PropEA_HasOpenBasePositionForStrategy(symbol, InpMagic, strategy_letter))
+   {
+      Print(
+         "execute_trade skip - base position already open symbol=", symbol,
+         " strategy=", strategy_letter
+      );
       return false;
    }
 
@@ -653,6 +670,9 @@ bool execute_trade(
    Print(
       "execute_trade OK action=", action,
       " lot=", lot,
+      " py_lot=", lot_fallback,
+      " ref_equity=", ReferenceEquityForRiskCap(),
+      " max_xau=", InpMaxLotXAUUSD,
       " risk_budget=", risk_budget,
       " ticket=", result.order
    );
@@ -885,7 +905,7 @@ void RequestPipelineSignal()
    }
 
    string response;
-   if(!PostTradeSignal(body, response))
+   if(!PostTradeSignal(body, response, true))
    {
       g_last_request = TimeCurrent();
       g_pipeline_in_flight = false;
@@ -895,6 +915,7 @@ void RequestPipelineSignal()
    g_last_bar_time = rates[0].time;
    g_last_request  = TimeCurrent();
    ExecuteSignal(symbol, response);
+   PropEA_EndWebRequestSession(_Symbol);
    g_pipeline_in_flight = false;
 }
 
@@ -921,7 +942,11 @@ int OnInit()
          " history=", EffectiveHistoryBars(_Symbol),
          " max_spread=", MaxSpreadForSymbol(_Symbol),
          " http_timeout_ms=", WebRequestTimeoutMs(_Symbol),
-         " pyramid_live=", (InpPyramidLiveEnabled ? "on" : "off"));
+         " pyramid_live=", (InpPyramidLiveEnabled ? "on" : "off"),
+         " ref_equity=", ReferenceEquityForRiskCap(),
+         " fintokei_cap=", InpMaxSinglePositionLossPct, "%",
+         " max_lot_xau=", InpMaxLotXAUUSD,
+         " max_lot_fx=", InpMaxLotFX);
    return INIT_SUCCEEDED;
 }
 

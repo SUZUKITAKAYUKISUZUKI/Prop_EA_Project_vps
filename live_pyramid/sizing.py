@@ -21,14 +21,13 @@ def cap_pyramid_lot_size(
     sl_distance = abs(reference_price - sl_price)
     if sl_distance <= 0.0:
         return lot_size
-    from audit.risk_manager import cap_lot_size_to_max_loss_pct
+    from audit.risk_manager import apply_execution_lot_caps
 
-    ref = phase_start_equity if phase_start_equity > 0 else equity
-    capped, _ = cap_lot_size_to_max_loss_pct(
+    capped, _ = apply_execution_lot_caps(
         lot_size,
         pair=pair,
         sl_distance=sl_distance,
         equity=equity,
-        reference_equity=ref,
+        phase_start_equity=phase_start_equity,
     )
     return capped

@@ -151,19 +151,16 @@ def apply_profit_cushion_brake(
 def is_mutual_exclusion_enabled(setup_type: str | None = None) -> bool:
     """MUTUAL_EXCLUSION_ENABLED=0 または MUTUAL_EXCLUSION_MODE=off で無効（未設定時 ON）。
 
-    ピラミッディング有効戦略は L2 を自動 OFF（同一戦略内の積み増しを許可）。
+    ベースエントリーは戦略×シンボル1ポジションを常に適用。ピラミッド積み増しは
+    EA 側 PropEA_PYR_* コメントで区別し、L2 ベースロックとは別経路。
     """
+    del setup_type  # reserved for per-strategy overrides; pyramid does not disable L2
     raw = os.getenv("MUTUAL_EXCLUSION_ENABLED", "1").strip().lower()
     if raw in ("0", "false", "off", "no", "disabled"):
         return False
     legacy = os.getenv("MUTUAL_EXCLUSION_MODE", "").strip().lower()
     if legacy in ("off", "none", "disabled", "0", "false"):
         return False
-    if setup_type is not None:
-        from pyramid_manager import is_pyramid_enabled
-
-        if is_pyramid_enabled(setup_type):
-            return False
     return True
 
 
@@ -271,6 +268,7 @@ class OpenPosition:
     setup_type: str
     entry_ts: Any
     close_ts: Any
+    provisional: bool = False
 
 # --- プロファイル別ベースリスク ---
 CHALLENGE_PROFIT_TARGET_PCT = 8.0
@@ -474,6 +472,70 @@ FINTOKEI_SINGLE_POSITION_LOSS_LIMIT_PCT = float(
     os.getenv("FINTOKEI_SINGLE_POSITION_LOSS_LIMIT_PCT", "3.0")
 )
 REASON_FINTOKEI_SINGLE_POSITION_CAP = "FINTOKEI_SINGLE_POSITION_CAP"
+REASON_SYMBOL_HARD_LOT_CAP = "SYMBOL_HARD_LOT_CAP"
+PROP_REFERENCE_EQUITY = float(os.getenv("PROP_REFERENCE_EQUITY", "0") or "0")
+PROP_MAX_LOT_XAUUSD = float(os.getenv("PROP_MAX_LOT_XAUUSD", "0.05"))
+PROP_MAX_LOT_FX = float(os.getenv("PROP_MAX_LOT_FX", "2.00"))
+
+
+def fintokei_reference_equity(
+    equity: float,
+    phase_start_equity: float | None = None,
+) -> float:
+    """
+    Fintokei 3% 単一ポジション上限の基準エクイティ。
+
+    口座Equity（例: 967k）ではなく、チャレンジ開始資金 / PROP_REFERENCE_EQUITY を使う。
+    """
+    if PROP_REFERENCE_EQUITY > 0.0:
+        return PROP_REFERENCE_EQUITY
+    if phase_start_equity is not None and phase_start_equity > 0.0:
+        return phase_start_equity
+    return STARTING_EQUITY
+
+
+def symbol_hard_lot_cap(pair: str) -> float:
+    """Return symbol hard lot ceiling; 0 = disabled (Fintokei 3% only)."""
+    from strategies.market_utils import normalize_pair_name
+
+    canonical = normalize_pair_name(pair) or str(pair).upper()
+    if canonical == "XAUUSD":
+        return PROP_MAX_LOT_XAUUSD
+    return PROP_MAX_LOT_FX
+
+
+def apply_execution_lot_caps(
+    lot_size: float,
+    *,
+    pair: str,
+    sl_distance: float,
+    equity: float,
+    phase_start_equity: float | None = None,
+) -> tuple[float, list[str]]:
+    """Apply Fintokei 3% lot cap + symbol hard lot cap for live execution."""
+    tags: list[str] = []
+    if lot_size <= 0.0 or sl_distance <= 0.0 or equity <= 0.0:
+        return lot_size, tags
+
+    ref = fintokei_reference_equity(equity, phase_start_equity)
+    capped_lot, was_capped = cap_lot_size_to_max_loss_pct(
+        lot_size,
+        pair=pair,
+        sl_distance=sl_distance,
+        equity=equity,
+        reference_equity=ref,
+    )
+    if was_capped:
+        lot_size = capped_lot
+        tags.append(REASON_FINTOKEI_SINGLE_POSITION_CAP)
+
+    hard_cap = symbol_hard_lot_cap(pair)
+    if hard_cap > 0.0 and lot_size > hard_cap:
+        lot_size = round(hard_cap, 4)
+        if REASON_SYMBOL_HARD_LOT_CAP not in tags:
+            tags.append(REASON_SYMBOL_HARD_LOT_CAP)
+
+    return lot_size, tags
 
 
 def is_fintokei_single_position_rule_enabled() -> bool:
@@ -627,20 +689,20 @@ def finalize_lot_factor_for_execution(
     risk_budget = round(equity * base_risk_pct * lot_factor, 2)
     lot_size = lot_from_risk_budget(risk_budget, sl_distance, lot_factor, pair=pair)
     if pair and lot_size > 0.0:
-        capped_lot, was_lot_capped = cap_lot_size_to_max_loss_pct(
+        lot_size, cap_tags = apply_execution_lot_caps(
             lot_size,
             pair=pair,
             sl_distance=sl_distance,
             equity=equity,
-            reference_equity=phase_start_equity,
+            phase_start_equity=phase_start_equity,
         )
-        if was_lot_capped:
-            lot_size = capped_lot
+        for tag in cap_tags:
+            if tag not in tags:
+                tags.append(tag)
+        if cap_tags:
             risk_budget = risk_budget_from_lot_size(
                 lot_size, sl_distance, lot_factor, pair=pair
             )
-            if REASON_FINTOKEI_SINGLE_POSITION_CAP not in tags:
-                tags.append(REASON_FINTOKEI_SINGLE_POSITION_CAP)
             if lot_size <= 0.0:
                 return 0.0, 0.0, 0.0, tags, True
     return lot_factor, risk_budget, lot_size, tags, False
@@ -761,7 +823,11 @@ def cap_lot_size_to_max_loss_pct(
     from strategies.market_utils import pip_size_for_pair, pip_value_per_lot_for_pair
 
     limit = fintokei_single_position_loss_limit_pct() if limit_pct is None else limit_pct
-    ref = reference_equity if reference_equity and reference_equity > 0 else equity
+    ref = (
+        reference_equity
+        if reference_equity and reference_equity > 0
+        else fintokei_reference_equity(equity)
+    )
     max_loss_usd = ref * (limit / 100.0)
     pips = sl_distance / pip_size_for_pair(pair)
     if pips <= 0:
@@ -917,6 +983,11 @@ class AccountState:
             self.last_trade_date = day
 
     def _pair_key(self, pair: str) -> str:
+        from strategies.market_utils import normalize_pair_name
+
+        canonical = normalize_pair_name(pair)
+        if canonical is not None:
+            return canonical
         return pair.strip().upper()
 
     def is_blocked_by_mutual_exclusion(
@@ -957,6 +1028,8 @@ class AccountState:
         pair: str,
         setup_type: str,
         holding_minutes: int,
+        *,
+        provisional: bool = False,
     ) -> None:
         """実執行ポジションの [entry, close) を登録。"""
         import pandas as pd
@@ -969,6 +1042,40 @@ class AccountState:
                 setup_type=setup_type.strip(),
                 entry_ts=entry,
                 close_ts=close,
+                provisional=provisional,
+            )
+        )
+
+    def register_live_signal_lock(
+        self,
+        ts,
+        pair: str,
+        setup_type: str,
+        holding_minutes: int,
+    ) -> None:
+        """Live: BUY/SELL 承認直後の暫定 L2 ロック（約定前レース防止）。"""
+        import pandas as pd
+
+        entry = pd.Timestamp(ts)
+        close = entry + pd.Timedelta(minutes=max(int(holding_minutes), 1))
+        pair_u = self._pair_key(pair)
+        setup_u = setup_type.strip()
+        self.open_positions = [
+            pos
+            for pos in self.open_positions
+            if not (
+                pos.provisional
+                and pos.pair == pair_u
+                and pos.setup_type == setup_u
+            )
+        ]
+        self.open_positions.append(
+            OpenPosition(
+                pair=pair_u,
+                setup_type=setup_u,
+                entry_ts=entry,
+                close_ts=close,
+                provisional=True,
             )
         )
 
@@ -995,7 +1102,7 @@ class AccountState:
             if not (
                 pos.pair == pair_u
                 and pos.setup_type == setup_u
-                and pd.Timestamp(pos.entry_ts) == entry
+                and (pos.provisional or pd.Timestamp(pos.entry_ts) == entry)
             )
         ]
         self.open_positions.append(
@@ -1004,6 +1111,7 @@ class AccountState:
                 setup_type=setup_u,
                 entry_ts=entry,
                 close_ts=close,
+                provisional=False,
             )
         )
 

@@ -29,7 +29,7 @@ PROP_MAX_SINGLE_POSITION_LOSS_PCT = float(
     os.getenv("FINTOKEI_SINGLE_POSITION_LOSS_LIMIT_PCT", "3.0")
 )
 PROP_REFERENCE_EQUITY = float(os.getenv("PROP_REFERENCE_EQUITY", "0") or "0")
-PROP_MAX_LOT_XAUUSD = float(os.getenv("PROP_MAX_LOT_XAUUSD", "0.50"))
+PROP_MAX_LOT_XAUUSD = float(os.getenv("PROP_MAX_LOT_XAUUSD", "0.05"))
 PROP_MAX_LOT_FX = float(os.getenv("PROP_MAX_LOT_FX", "2.00"))
 
 
@@ -314,6 +314,33 @@ def execute_trade(
             ticket=0,
             risk_budget=risk_budget,
             message="Calculated lot is zero after risk caps",
+        )
+
+    from audit.live_position_guard import (
+        extract_strategy_letter,
+        has_open_base_position_for_strategy,
+        live_base_entry_blocked_message,
+    )
+
+    open_positions = mt5.positions_get(symbol=symbol) or []
+    strategy_letter = extract_strategy_letter(comment)
+    if has_open_base_position_for_strategy(
+        open_positions,
+        pair=symbol,
+        magic=magic,
+        strategy_letter=strategy_letter,
+    ):
+        return TradeExecutionResult(
+            success=False,
+            action=action,
+            symbol=symbol,
+            lot=0.0,
+            ticket=0,
+            risk_budget=risk_budget,
+            message=live_base_entry_blocked_message(
+                pair=symbol,
+                strategy_letter=strategy_letter,
+            ),
         )
 
     request: dict[str, Any] = {
