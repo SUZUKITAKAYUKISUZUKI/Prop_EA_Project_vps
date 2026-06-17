@@ -127,13 +127,16 @@ double PyramidLive_ComputeAtr(const string symbol, const ENUM_TIMEFRAMES tf, con
 {
    MqlRates rates[];
    ArraySetAsSeries(rates, true);
-   int copied = CopyRates(symbol, tf, 0, period + 1, rates);
-   if(copied < period + 1)
+   const int need = period + 2;
+   int copied = CopyRates(symbol, tf, 0, need, rates);
+   if(copied < need)
       return 0.0;
 
    double sum_tr = 0.0;
    for(int i = 1; i <= period; i++)
    {
+      if(i + 1 >= copied)
+         break;
       double high = rates[i].high;
       double low  = rates[i].low;
       double prev_close = rates[i + 1].close;
