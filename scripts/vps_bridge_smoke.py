@@ -95,6 +95,21 @@ def main() -> None:
     print("[OK] VPS minimum files present (A+B+C+D+E)")
 
     try:
+        import main_platform as mp
+
+        version = getattr(mp, "LIVE_SETUP_MATCH_VERSION", "")
+        if not version:
+            _fail(
+                "main_platform.py missing LIVE_SETUP_MATCH_VERSION — old deploy. "
+                "Re-sync from dev and git pull."
+            )
+        if not hasattr(mp, "_setup_live_signal_time"):
+            _fail("main_platform.py missing _setup_live_signal_time (signal_v2 live match)")
+        print(f"[OK] Live setup match ({version})")
+    except Exception as exc:
+        _fail(f"main_platform live marker check: {exc}")
+
+    try:
         from strategies import STRATEGY_LETTER_BY_MODE, STRATEGY_LETTER_BY_SETUP_TYPE, expand_strategy_modes
 
         assert expand_strategy_modes("abcde") == ("lsfc", "dbbs", "dinapoli", "vamr", "smrs")

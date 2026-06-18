@@ -53,10 +53,9 @@ string PyramidLive_ApiUrl(const string path)
 bool PyramidLive_PostJson(const string url, const string body, string &response)
 {
    const int timeout_ms = 5000;
-   int my_slot = PropEA_RequestSlotIndex(_Symbol);
-   if(!PropEA_BeginWebRequestSession(_Symbol, timeout_ms, my_slot))
+   if(!PropEA_WaitAcquireWebRequestLock(PropEA_ComputeLockWaitMs(timeout_ms)))
    {
-      Print("PyramidLive_PostJson deferred — fleet/lock session unavailable symbol=", _Symbol);
+      Print("PyramidLive_PostJson deferred — WebRequest lock busy symbol=", _Symbol);
       return false;
    }
 
@@ -88,7 +87,7 @@ bool PyramidLive_PostJson(const string url, const string body, string &response)
       }
       break;
    }
-   PropEA_EndWebRequestSession(_Symbol);
+   PropEA_ReleaseWebRequestLock();
 
    if(status == -1)
    {

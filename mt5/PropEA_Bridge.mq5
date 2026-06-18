@@ -4,7 +4,7 @@
 //| MT5: ツール→オプション→エキスパートアドバイザー→WebRequest許可URL |
 //+------------------------------------------------------------------+
 #property copyright "Prop EA Project"
-#property version   "1.03"
+#property version   "1.04"
 
 input string InpApiUrl              = "http://127.0.0.1:8000/trade_signal";
 input int    InpTimerSeconds        = 60;          // シグナル照会間隔（秒）
@@ -486,12 +486,9 @@ void MaybeBridgeHealthCheck()
 bool PostTradeSignal(const string body, string &response, const bool keep_session = false)
 {
    int timeout_ms = WebRequestTimeoutMs(_Symbol);
-   int my_slot = PropEA_RequestSlotIndex(_Symbol);
-   if(!PropEA_BeginWebRequestSession(_Symbol, timeout_ms, my_slot))
+   if(!PropEA_WaitAcquireWebRequestLock(PropEA_ComputeLockWaitMs(timeout_ms)))
    {
-      int turn_wait_ms = PropEA_ComputeFleetTurnWaitMs(timeout_ms);
-      Print("PostTradeSignal deferred — fleet/lock session unavailable (turn_wait=",
-            turn_wait_ms, "ms) slot=", my_slot, " symbol=", _Symbol);
+      Print("PostTradeSignal deferred — WebRequest lock busy symbol=", _Symbol);
       return false;
    }
 
@@ -526,7 +523,7 @@ bool PostTradeSignal(const string body, string &response, const bool keep_sessio
 
    if(status == -1)
    {
-      PropEA_EndWebRequestSession(_Symbol);
+      PropEA_ReleaseWebRequestLock();
       int err = GetLastError();
       Print("WebRequest failed. ", WebRequestStatusHint(status, err),
             " url=", InpApiUrl);
@@ -535,13 +532,13 @@ bool PostTradeSignal(const string body, string &response, const bool keep_sessio
    }
    if(status == 1003)
    {
-      PropEA_EndWebRequestSession(_Symbol);
+      PropEA_ReleaseWebRequestLock();
       Print("PostTradeSignal busy(1003) after retries — symbol=", _Symbol, " (next bar/timer retry)");
       return false;
    }
    if(status != 200)
    {
-      PropEA_EndWebRequestSession(_Symbol);
+      PropEA_ReleaseWebRequestLock();
       Print("HTTP status=", status, " body=", CharArrayToString(result),
             " | ", WebRequestStatusHint(status, GetLastError()));
       g_http_fail_streak++;
@@ -549,7 +546,7 @@ bool PostTradeSignal(const string body, string &response, const bool keep_sessio
    }
 
    if(!keep_session)
-      PropEA_EndWebRequestSession(_Symbol);
+      PropEA_ReleaseWebRequestLock();
 
    g_http_fail_streak = 0;
    BridgeMarkHealthConfirmed();
@@ -917,7 +914,7 @@ void RequestPipelineSignal()
    g_last_bar_time = rates[0].time;
    g_last_request  = TimeCurrent();
    ExecuteSignal(symbol, response);
-   PropEA_EndWebRequestSession(_Symbol);
+   PropEA_ReleaseWebRequestLock();
    g_pipeline_in_flight = false;
 }
 
@@ -929,6 +926,7 @@ int OnInit()
       SymbolSelect(g_correlated_symbol, true);
 
    PyramidLive_SetApiBaseFromTradeUrl(InpApiUrl);
+   PropEA_ClearLegacyFleetGlobals();
    PropEA_ConfigureTradeExecution(
       InpMaxSinglePositionLossPct,
       InpPropReferenceEquity,
@@ -939,7 +937,7 @@ int OnInit()
    if(init_stagger_ms > 0)
       Sleep(init_stagger_ms);
    EventSetTimer(InpTimerSeconds);
-   Print("PropEA_Bridge v1.03 initialized. API=", InpApiUrl, " corr=", g_correlated_symbol,
+   Print("PropEA_Bridge v1.04 initialized. API=", InpApiUrl, " corr=", g_correlated_symbol,
          " tf=", EnumToString(BarTimeframeForSymbol(_Symbol)),
          " history=", EffectiveHistoryBars(_Symbol),
          " max_spread=", MaxSpreadForSymbol(_Symbol),
