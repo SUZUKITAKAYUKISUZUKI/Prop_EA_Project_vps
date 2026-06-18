@@ -10,6 +10,10 @@ from src.database.data_source import (
     infer_source_from_path,
     infer_source_from_run_type,
 )
+from src.database.profile_migrations import (
+    PROFILE_MANAGER_SCHEMA_VERSION,
+    apply_profile_manager_migrations,
+)
 
 SCHEMA_META_DDL = """
 CREATE TABLE IF NOT EXISTS schema_meta (
@@ -59,6 +63,13 @@ def _set_schema_meta(conn: sqlite3.Connection, key: str, value: str) -> None:
     )
 
 
+def _get_schema_meta(conn: sqlite3.Connection, key: str) -> str | None:
+    if not _table_exists(conn, "schema_meta"):
+        return None
+    row = conn.execute("SELECT value FROM schema_meta WHERE key=?", (key,)).fetchone()
+    return str(row[0]) if row else None
+
+
 def _backfill_run_sources(conn: sqlite3.Connection) -> None:
     if not _table_exists(conn, "runs"):
         return
@@ -103,36 +114,134 @@ def _propagate_sources(conn: sqlite3.Connection) -> None:
         )
 
 
-def apply_portfolio_migrations(conn: sqlite3.Connection) -> None:
+def apply_portfolio_migrations(
+    conn: sqlite3.Connection,
+    *,
+    run_legacy_backfill: bool = False,
+) -> None:
     conn.executescript(SCHEMA_META_DDL)
 
-    _add_column(conn, "runs", "source TEXT NOT NULL DEFAULT 'BACKTEST'")
-    _add_column(conn, "runs", f"schema_version INTEGER NOT NULL DEFAULT {PORTFOLIO_DB_SCHEMA_VERSION}")
-
-    _add_column(conn, "trades", "source TEXT NOT NULL DEFAULT 'BACKTEST'")
-    _add_column(conn, "features", "source TEXT NOT NULL DEFAULT 'BACKTEST'")
-    _add_column(conn, "features", f"schema_version INTEGER NOT NULL DEFAULT {FEATURE_LOG_SCHEMA_VERSION}")
-
-    _add_column(conn, "trade_events", "source TEXT NOT NULL DEFAULT 'LIVE'")
-    _add_column(conn, "trade_events", f"schema_version INTEGER NOT NULL DEFAULT {FEATURE_LOG_SCHEMA_VERSION}")
-
-    _backfill_run_sources(conn)
-    _propagate_sources(conn)
-
-    if _table_exists(conn, "trade_events"):
-        conn.execute(
-            "UPDATE trade_events SET source='LIVE' WHERE source IS NULL OR source=''"
-        )
-
-    conn.executescript(
-        """
-        CREATE INDEX IF NOT EXISTS idx_runs_source ON runs(source);
-        CREATE INDEX IF NOT EXISTS idx_trades_source ON trades(source);
-        CREATE INDEX IF NOT EXISTS idx_features_source ON features(source);
-        CREATE INDEX IF NOT EXISTS idx_trade_events_source ON trade_events(source);
-        """
+    portfolio_ver = _get_schema_meta(conn, "portfolio_db_schema_version")
+    profile_ver = _get_schema_meta(conn, "profile_manager_schema_version")
+    schema_current = (
+        not run_legacy_backfill
+        and portfolio_ver == str(PORTFOLIO_DB_SCHEMA_VERSION)
+        and profile_ver == PROFILE_MANAGER_SCHEMA_VERSION
     )
 
-    _set_schema_meta(conn, "portfolio_db_schema_version", str(PORTFOLIO_DB_SCHEMA_VERSION))
-    _set_schema_meta(conn, "feature_log_schema_version", str(FEATURE_LOG_SCHEMA_VERSION))
+    if not schema_current:
+        _add_column(conn, "runs", "source TEXT NOT NULL DEFAULT 'BACKTEST'")
+        _add_column(conn, "runs", f"schema_version INTEGER NOT NULL DEFAULT {PORTFOLIO_DB_SCHEMA_VERSION}")
+
+        _add_column(conn, "trades", "source TEXT NOT NULL DEFAULT 'BACKTEST'")
+        _add_column(conn, "features", "source TEXT NOT NULL DEFAULT 'BACKTEST'")
+        _add_column(conn, "features", f"schema_version INTEGER NOT NULL DEFAULT {FEATURE_LOG_SCHEMA_VERSION}")
+
+        _add_column(conn, "trade_events", "source TEXT NOT NULL DEFAULT 'LIVE'")
+        _add_column(conn, "trade_events", f"schema_version INTEGER NOT NULL DEFAULT {FEATURE_LOG_SCHEMA_VERSION}")
+
+        if run_legacy_backfill:
+            run_legacy_source_backfill(conn)
+
+        conn.executescript(
+            """
+            CREATE INDEX IF NOT EXISTS idx_runs_source ON runs(source);
+            CREATE INDEX IF NOT EXISTS idx_trades_source ON trades(source);
+            CREATE INDEX IF NOT EXISTS idx_features_source ON features(source);
+            CREATE INDEX IF NOT EXISTS idx_trade_events_source ON trade_events(source);
+            """
+        )
+
+        _set_schema_meta(conn, "portfolio_db_schema_version", str(PORTFOLIO_DB_SCHEMA_VERSION))
+        _set_schema_meta(conn, "feature_log_schema_version", str(FEATURE_LOG_SCHEMA_VERSION))
+        apply_profile_manager_migrations(conn)
+
+    from src.database.risk_attribution_migrations import apply_risk_attribution_migrations
+
+    apply_risk_attribution_migrations(conn)
+    from src.database.auto_switch_migrations import apply_auto_switch_migrations
+
+    apply_auto_switch_migrations(conn)
+    from src.database.state_analytics_migrations import apply_state_analytics_migrations
+
+    apply_state_analytics_migrations(conn)
+    from src.database.risk_attribution_v2_migrations import apply_risk_attribution_v2_migrations
+
+    apply_risk_attribution_v2_migrations(conn)
+    from src.database.paae_migrations import apply_paae_migrations
+
+    apply_paae_migrations(conn)
+    from src.database.pdts_migrations import apply_pdts_migrations
+
+    apply_pdts_migrations(conn)
+    from src.database.slm_migrations import apply_slm_migrations
+
+    apply_slm_migrations(conn)
+    from src.database.slm_v2_migrations import apply_slm_v2_migrations
+
+    apply_slm_v2_migrations(conn)
+    from src.database.slm_v3_migrations import apply_slm_v3_migrations
+
+    apply_slm_v3_migrations(conn)
+    from src.database.age_migrations import apply_age_migrations
+
+    apply_age_migrations(conn)
+    from src.database.age_v3_migrations import apply_age_v3_migrations
+
+    apply_age_v3_migrations(conn)
+    from src.database.age_v4_migrations import apply_age_v4_migrations
+
+    apply_age_v4_migrations(conn)
+    from src.database.cace_migrations import apply_cace_migrations
+
+    apply_cace_migrations(conn)
+    from src.database.cace_v15_migrations import apply_cace_v15_migrations
+
+    apply_cace_v15_migrations(conn)
+    from src.database.cace_v16_migrations import apply_cace_v16_migrations
+
+    apply_cace_v16_migrations(conn)
+    from src.database.cace_v17_migrations import apply_cace_v17_migrations
+
+    apply_cace_v17_migrations(conn)
+    from src.database.mie_migrations import apply_mie_migrations
+
+    apply_mie_migrations(conn)
+    from src.database.apm_migrations import apply_apm_migrations
+
+    apply_apm_migrations(conn)
+    from src.database.apm_v2_migrations import apply_apm_v2_migrations
+
+    apply_apm_v2_migrations(conn)
+    from src.database.cil_migrations import apply_cil_migrations
+
+    apply_cil_migrations(conn)
+    from src.database.ai_cio_migrations import apply_ai_cio_migrations
+
+    apply_ai_cio_migrations(conn)
+    from src.database.orl_migrations import apply_orl_migrations
+
+    apply_orl_migrations(conn)
+    from src.database.production_hardening_migrations import apply_production_hardening_migrations
+
+    apply_production_hardening_migrations(conn)
+    from src.database.rc2_migrations import apply_rc2_migrations
+
+    apply_rc2_migrations(conn)
+    conn.commit()
+
+
+def run_legacy_source_backfill(conn: sqlite3.Connection) -> None:
+    """One-time/heavy lineage backfill — run from tools/migrate_all.py only."""
+    if _get_schema_meta(conn, "run_sources_backfill_v1") == "done":
+        return
+    _backfill_run_sources(conn)
+    _propagate_sources(conn)
+    _set_schema_meta(conn, "run_sources_backfill_v1", "done")
+    if _get_schema_meta(conn, "trade_events_source_v1") != "done":
+        if _table_exists(conn, "trade_events"):
+            conn.execute(
+                "UPDATE trade_events SET source='LIVE' WHERE source IS NULL OR source=''"
+            )
+        _set_schema_meta(conn, "trade_events_source_v1", "done")
     conn.commit()

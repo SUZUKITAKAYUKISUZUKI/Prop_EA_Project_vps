@@ -39,11 +39,34 @@ def load_prop_profiles(path: Path | None = None) -> dict[str, PropProfile]:
     return out
 
 
-def get_profile(name: str, path: Path | None = None) -> PropProfile:
-    profiles = load_prop_profiles(path)
-    if name not in profiles:
-        raise KeyError(f"Unknown prop profile '{name}'. Available: {', '.join(profiles)}")
-    return profiles[name]
+def get_profile(name: str | None = None, path: Path | None = None) -> PropProfile:
+    """Resolve prop profile from SQLite Profile Manager, falling back to JSON."""
+    legacy_map = {
+        "Fintokei_100K": "PROP_FINTOKEI",
+        "FTMO_100K": "PROP_FTMO",
+        "FundingPips_100K": "PROP_FTMO",
+    }
+    try:
+        from src.services.profile_service import ProfileContext, ProfileService
+
+        svc = ProfileService()
+        try:
+            if name is None:
+                ctx = svc.load_active_profile()
+            else:
+                profile_id = legacy_map.get(name, name)
+                ctx = ProfileContext.from_record(svc.get_profile(profile_id))
+            return ctx.to_prop_profile()
+        finally:
+            svc.close()
+    except Exception:
+        profiles = load_prop_profiles(path)
+        resolved = name or "Fintokei_100K"
+        if resolved not in profiles:
+            raise KeyError(
+                f"Unknown prop profile '{resolved}'. Available: {', '.join(profiles)}"
+            )
+        return profiles[resolved]
 
 
 def load_pfoo_config(path: Path | None = None) -> dict[str, Any]:

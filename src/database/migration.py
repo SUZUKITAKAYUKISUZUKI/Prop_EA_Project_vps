@@ -10,6 +10,7 @@ from src.database.csv_importer import import_all_csvs
 from src.database.db_manager import DatabaseManager
 from src.database.market_importer import import_all_market_csvs
 from src.database.schema import MARKET_TABLES, PORTFOLIO_TABLES
+from src.database.schema_migrations import run_legacy_source_backfill
 
 logger = logging.getLogger(__name__)
 
@@ -59,6 +60,7 @@ def run_migration(project_root: Path, config_path: Path | None = None) -> dict[s
             cfg["market_roots"],
             chunk_size=cfg["chunk_size"],
         )
+        run_legacy_source_backfill(db.portfolio)
         result["table_counts"] = _table_counts(db)
 
     return result

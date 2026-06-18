@@ -118,6 +118,34 @@ def _build_challenge_state(
     )
 
 
+def _resolve_account_state(
+    account: AccountSnapshot,
+    profile: PropProfile,
+    challenge: ChallengeState,
+) -> str:
+    from src.account_state_engine.account_state_engine import AccountStateEngine, AccountStateInput
+
+    starting = float(getattr(account, "phase_start_equity", None) or STARTING_EQUITY)
+    target_balance = starting * (1.0 + profile.target_profit / 100.0)
+    challenge_passed = challenge.profit_progress_percent >= profile.target_profit
+    profile_key = str(getattr(profile, "profile_key", "") or "challenge")
+    account_type = "live" if profile_key == "live" else "prop"
+
+    engine = AccountStateEngine()
+    result = engine.evaluate(
+        AccountStateInput(
+            current_balance=float(account.equity),
+            initial_balance=starting,
+            target_balance=target_balance,
+            max_total_dd=float(profile.total_dd_limit),
+            current_dd=float(challenge.total_dd_used_percent),
+            account_type=account_type,
+            challenge_passed=challenge_passed,
+        )
+    )
+    return result.state.value
+
+
 def _effective_global_risk_mult(
     progress_mult: float,
     recovery: RecoveryDecision,
@@ -250,7 +278,19 @@ class PropOptimizer:
         mode: ObjectiveMode = "BALANCED",
     ) -> None:
         self.config = config or load_pfoo_config()
-        self.profile = get_profile(profile_name or self.config.get("default_profile", "Fintokei_100K"))
+        resolved_name = profile_name
+        if resolved_name is None:
+            try:
+                from src.services.profile_service import ProfileService
+
+                svc = ProfileService()
+                try:
+                    resolved_name = svc.load_active_profile().profile_id
+                finally:
+                    svc.close()
+            except Exception:
+                resolved_name = self.config.get("default_profile", "Fintokei_100K")
+        self.profile = get_profile(resolved_name)
         self.mode = mode.upper()  # type: ignore[assignment]
 
     def evaluate(
@@ -276,6 +316,7 @@ class PropOptimizer:
             phase_start_equity=STARTING_EQUITY,
         )
         ch = challenge or _build_challenge_state(acct, self.profile)
+        account_state = _resolve_account_state(acct, self.profile, ch)
 
         prae_ctx = prae_context or _load_prae_context(
             PROJECT_ROOT / self.config.get("prae_artifact_dir", "backtest_results/prae_v1")
@@ -310,6 +351,7 @@ class PropOptimizer:
             config=self.config,
             prae_context=prae_ctx,
             base_weights=base_weights,
+            account_state=account_state,
         )
 
         weighted = apply_allocation_weights(trades, risk_budget.weights)

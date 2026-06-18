@@ -172,3 +172,18 @@ class WFTRepository:
         else:
             row = self._db.query("SELECT COUNT(*) AS c FROM wft_windows", one=True)
         return int(row["c"]) if row else 0
+
+    def load_latest_for_strategy(self, strategy: str) -> dict[str, Any] | None:
+        row = self._db.query(
+            """
+            SELECT r.*, s.mean_oos_pf, s.pass_rate, s.stability_json
+            FROM wft_runs r
+            LEFT JOIN wft_summary s ON s.wft_id = r.wft_id
+            WHERE r.strategy = ?
+            ORDER BY r.created_at DESC
+            LIMIT 1
+            """,
+            (strategy,),
+            one=True,
+        )
+        return dict(row) if row else None

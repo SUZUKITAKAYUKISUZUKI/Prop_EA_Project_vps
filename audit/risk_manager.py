@@ -173,6 +173,9 @@ def mutual_exclusion_reason_tag() -> str:
 
 
 def portfolio_lot_multiplier() -> float:
+    risk_mult = os.getenv("PORTFOLIO_RISK_MULTIPLIER", "").strip()
+    if risk_mult:
+        return max(0.0, float(risk_mult))
     raw = os.getenv(
         "PORTFOLIO_LOT_MULTIPLIER",
         str(DEFAULT_PORTFOLIO_LOT_MULTIPLIER),

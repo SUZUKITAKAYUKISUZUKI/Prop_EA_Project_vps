@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
 from contextlib import contextmanager
 from datetime import datetime, timezone
@@ -20,6 +21,23 @@ from src.database.data_source import (
 
 def utc_now_iso() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+
+
+def default_sqlite_timeout_sec() -> float:
+    raw = os.environ.get("PORTFOLIO_DB_TIMEOUT_SEC", "30")
+    try:
+        return max(1.0, float(raw))
+    except ValueError:
+        return 30.0
+
+
+def configure_sqlite_connection(
+    conn: sqlite3.Connection,
+    *,
+    timeout_sec: float | None = None,
+) -> None:
+    timeout = default_sqlite_timeout_sec() if timeout_sec is None else timeout_sec
+    conn.execute(f"PRAGMA busy_timeout={int(timeout * 1000)}")
 
 
 class DatabaseManager:
@@ -51,10 +69,12 @@ class DatabaseManager:
             self.rollback()
         self.close()
 
-    def connect(self) -> None:
+    def connect(self, *, timeout_sec: float | None = None) -> None:
+        timeout = default_sqlite_timeout_sec() if timeout_sec is None else timeout_sec
         self.portfolio_path.parent.mkdir(parents=True, exist_ok=True)
-        self._portfolio_conn = sqlite3.connect(self.portfolio_path)
+        self._portfolio_conn = sqlite3.connect(self.portfolio_path, timeout=timeout)
         self._portfolio_conn.row_factory = sqlite3.Row
+        configure_sqlite_connection(self._portfolio_conn, timeout_sec=timeout)
         create_portfolio_schema(
             self._portfolio_conn,
             journal_mode=self.journal_mode,
@@ -62,8 +82,9 @@ class DatabaseManager:
         )
         if self.market_path is not None:
             self.market_path.parent.mkdir(parents=True, exist_ok=True)
-            self._market_conn = sqlite3.connect(self.market_path)
+            self._market_conn = sqlite3.connect(self.market_path, timeout=timeout)
             self._market_conn.row_factory = sqlite3.Row
+            configure_sqlite_connection(self._market_conn, timeout_sec=timeout)
             create_market_schema(
                 self._market_conn,
                 journal_mode=self.journal_mode,

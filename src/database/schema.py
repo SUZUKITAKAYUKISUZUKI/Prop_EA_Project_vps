@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import sqlite3
 
+from src.database.profile_migrations import apply_profile_manager_migrations
 from src.database.schema_migrations import apply_portfolio_migrations
 
 PORTFOLIO_TABLES = (
@@ -28,6 +29,11 @@ PORTFOLIO_TABLES = (
     "wft_windows",
     "wft_trades",
     "wft_summary",
+    "profiles",
+    "profile_settings",
+    "profile_strategy_allocations",
+    "profile_risk_settings",
+    "profile_execution_settings",
 )
 
 MARKET_TABLES = ("candles",)

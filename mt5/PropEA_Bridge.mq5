@@ -380,8 +380,10 @@ string BuildRequestJson(const string symbol, const ENUM_TIMEFRAMES tf)
    {
       MqlRates corr_rates[];
       ArraySetAsSeries(corr_rates, true);
-      string corr_bars = BuildBarsJson(g_correlated_symbol, tf, InpHistoryBars);
-      if(CopyRates(g_correlated_symbol, tf, 0, 1, corr_rates) == 1 && corr_bars != "")
+      ENUM_TIMEFRAMES corr_tf = BarTimeframeForSymbol(g_correlated_symbol);
+      int corr_bars_count = EffectiveHistoryBars(g_correlated_symbol);
+      string corr_bars = BuildBarsJson(g_correlated_symbol, corr_tf, corr_bars_count);
+      if(CopyRates(g_correlated_symbol, corr_tf, 0, 1, corr_rates) == 1 && corr_bars != "")
       {
          string corr_pair = CanonicalPair(g_correlated_symbol);
          json += StringFormat(

@@ -4106,18 +4106,83 @@ def _detect_setups_for_live_strategy(
     return gbp_setups, eur_setups, gbp_df, eur_df, h1_gbp, h1_eur
 
 
+def _live_m15_match_grace_sec() -> float:
+    raw = os.environ.get("LIVE_M15_MATCH_GRACE_SEC", "540")
+    try:
+        return max(0.0, float(raw))
+    except ValueError:
+        return 540.0
+
+
 def _find_active_setup(
     setups: list[SetupUnion],
     pair: str,
     bar_timestamp: pd.Timestamp,
+    *,
+    m15_grace_sec: float | None = None,
 ) -> SetupUnion | None:
-    """指定ペア・バー時刻に完全一致するセットアップのみ返す（同日再発火防止）。"""
+    """指定ペア・バー時刻のセットアップを返す。
+
+    完全一致を優先。ライブでは fleet 遅延で M15 境界バーを取り逃すことがあるため、
+    同一 M15 足内の遅延照合（grace）も許容する（LIVE_M15_MATCH_GRACE_SEC、既定 540s）。
+    grace=0 で完全一致のみ（テスト用）。
+    """
+    bar_timestamp = pd.Timestamp(bar_timestamp)
     exact = [
         s
         for s in setups
         if s.pair == pair and s.timestamp == bar_timestamp
     ]
-    return exact[0] if exact else None
+    if exact:
+        return exact[0]
+
+    grace = _live_m15_match_grace_sec() if m15_grace_sec is None else max(0.0, m15_grace_sec)
+    if grace <= 0:
+        return None
+
+    m15_floor = bar_timestamp.floor("15min")
+    for setup in setups:
+        if setup.pair != pair or setup.timestamp != m15_floor:
+            continue
+        delta_sec = (bar_timestamp - setup.timestamp).total_seconds()
+        if 0 <= delta_sec <= grace:
+            return setup
+    return None
+
+
+def _live_setup_diagnostic_summary(
+    *,
+    pair: str,
+    bar_timestamp: pd.Timestamp,
+    live_strategies: list[BaseStrategy],
+    state: LivePipelineState,
+    setup_cache: dict[tuple[str, str], list[SetupUnion]],
+) -> str:
+    """Optional HOLD diagnostics — set LIVE_SETUP_DIAG=1 on the bridge host."""
+    from strategies import resolve_strategy_mode
+
+    parts: list[str] = []
+    m15_floor = pd.Timestamp(bar_timestamp).floor("15min")
+    grace = _live_m15_match_grace_sec()
+    for strategy in live_strategies:
+        mode = resolve_strategy_mode(strategy)
+        cache_key = (pair, mode)
+        if cache_key not in setup_cache:
+            setup_cache[cache_key] = _detect_setups_for_live_pair(strategy, state, pair)
+        setups = setup_cache[cache_key]
+        on_pair = [s for s in setups if s.pair == pair]
+        exact = [s for s in on_pair if s.timestamp == bar_timestamp]
+        m15 = [s for s in on_pair if s.timestamp == m15_floor]
+        grace_hits = [
+            s
+            for s in on_pair
+            if s.timestamp == m15_floor
+            and 0 <= (bar_timestamp - s.timestamp).total_seconds() <= grace
+        ]
+        parts.append(
+            f"{mode}:total={len(on_pair)} exact={len(exact)} m15={len(m15)} grace={len(grace_hits)}"
+        )
+    return "; ".join(parts)
 
 
 def evaluate_precomputed_setup(
@@ -4492,20 +4557,37 @@ def _evaluate_trade_signal_with_pending_locked(
 
     matched_strategy: BaseStrategy | None = None
     active: SetupUnion | None = None
+    live_setup_cache: dict[tuple[str, str], list[SetupUnion]] = {}
     for strategy in live_strategies:
-        setups = _detect_setups_for_live_pair(strategy, state, pair)
+        mode = resolve_strategy_mode(strategy)
+        cache_key = (pair, mode)
+        if cache_key not in live_setup_cache:
+            live_setup_cache[cache_key] = _detect_setups_for_live_pair(strategy, state, pair)
+        setups = live_setup_cache[cache_key]
         active = _find_active_setup(setups, pair, bar_timestamp)
         if active is not None:
             matched_strategy = strategy
             break
     if active is None or matched_strategy is None:
+        hold_message = "No active setup at this bar"
+        if os.environ.get("LIVE_SETUP_DIAG", "").strip().lower() in {"1", "true", "yes"}:
+            hold_message += (
+                " | diag: "
+                + _live_setup_diagnostic_summary(
+                    pair=pair,
+                    bar_timestamp=bar_timestamp,
+                    live_strategies=live_strategies,
+                    state=state,
+                    setup_cache=live_setup_cache,
+                )
+            )
         return (
             {
                 "action": "HOLD",
                 "lot_size": 0.0,
                 "sl": 0.0,
                 "tp": 0.0,
-                "message": "No active setup at this bar",
+                "message": hold_message,
             },
             None,
         )

@@ -79,7 +79,11 @@ class AnalyticsWriteService:
                     run_id,
                     strategy,
                     contribution_r=_float(row.get("dd_contribution_r") or row.get("contribution_r")),
-                    contribution_dd=_float(row.get("dd_contribution_pct") or row.get("contribution_dd")),
+                    contribution_dd=_float(
+                        row.get("dd_contribution_pct")
+                        or row.get("contribution_dd")
+                        or row.get("DD Contribution %")
+                    ),
                     contribution_pf=_float(row.get("pf") or row.get("contribution_pf")),
                 )
 

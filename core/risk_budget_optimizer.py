@@ -18,7 +18,7 @@ from core.pass_probability import (
 from core.prop_profiles import PropProfile
 from core.utility_engine import ObjectiveMode, compute_utility
 from prae.loaders import STRATEGY_COLUMN
-from prae.metrics import apply_allocation_weights
+from prae.metrics import apply_allocation_weights, profit_factor, sharpe_r
 
 
 @dataclass(frozen=True)
@@ -72,6 +72,7 @@ def _score_allocation(
     mc_trials: int,
     horizon_trades: int | None = None,
     fast: bool = False,
+    account_state: str | None = None,
 ) -> dict[str, float]:
     weighted = apply_allocation_weights(trades, weights)
     active = weighted[weighted["allocation_weight"] > 0]
@@ -114,7 +115,29 @@ def _score_allocation(
         mode=mode,
         config=config,
     )
-    score = util.utility - penalty
+    total_r = float(active["R"].sum()) if "R" in active.columns else float(active["profit_r"].sum())
+    pf_val = profit_factor(active["R"]) if "R" in active.columns else 0.0
+    sharpe_val = sharpe_r(active["R"]) if "R" in active.columns else 0.0
+
+    if account_state:
+        from src.objective_optimizer.objective_profiles import (
+            compute_objective_score,
+            metrics_from_pfoo_context,
+        )
+
+        metrics = metrics_from_pfoo_context(
+            pass_probability=pass_res.pass_probability,
+            expected_pass_days=days_res.expected_pass_days,
+            total_dd_used_pct=challenge.total_dd_used_percent,
+            total_dd_limit=profile.total_dd_limit,
+            utility=util.utility,
+            pf=pf_val if pf_val != float("inf") else 3.0,
+            sharpe=sharpe_val,
+            total_r=total_r,
+        )
+        score = compute_objective_score(account_state, metrics) - penalty
+    else:
+        score = util.utility - penalty
     return {
         "score": round(score, 4),
         "pass_probability": pass_res.pass_probability,
@@ -134,12 +157,15 @@ def optimize_risk_budget(
     config: dict[str, Any] | None = None,
     prae_context: dict[str, Any] | None = None,
     base_weights: dict[str, float] | None = None,
+    account_state: str | None = None,
 ) -> RiskBudgetResult:
     """
     Allocate challenge risk budget across strategies using prop-firm utility.
 
     Uses PRAE risk contribution + correlation context as penalties/bonuses.
     """
+    from audit.risk_manager import is_portfolio_allocation_enabled
+
     cfg = config or {}
     rb_cfg = cfg.get("risk_budget") or {}
     min_w = float(rb_cfg.get("min_weight", 0.0))
@@ -168,10 +194,33 @@ def optimize_risk_budget(
             mc_trials=search_mc,
             horizon_trades=search_horizon,
             fast=True,
+            account_state=account_state,
         )
 
     equal = _normalize_weights(base_weights or {s: 1.0 for s in strategies}, strategies)
-    candidates.append({"weights": equal, **_eval(equal)})
+    equal_score = _eval(equal)
+
+    if not is_portfolio_allocation_enabled():
+        top_rows = [
+            {
+                "Rank": 1,
+                "PassRate": round(equal_score["pass_probability"], 2),
+                "ExpPassDays": round(equal_score["expected_pass_days"], 1),
+                "Utility": round(equal_score["utility"], 4),
+                "Score": round(equal_score["score"], 4),
+                "Allocation": ", ".join(f"{k}:{v:.3f}" for k, v in equal.items()),
+            }
+        ]
+        return RiskBudgetResult(
+            weights=equal,
+            score=float(equal_score["score"]),
+            pass_probability=float(equal_score["pass_probability"]),
+            expected_pass_days=float(equal_score["expected_pass_days"]),
+            utility=float(equal_score["utility"]),
+            top_candidates=pd.DataFrame(top_rows),
+        )
+
+    candidates.append({"weights": equal, **equal_score})
 
     for _ in range(trials):
         vec = _random_weight_vector(n, rng, min_w=min_w, max_w=max_w)
