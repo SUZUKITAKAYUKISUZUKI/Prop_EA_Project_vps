@@ -4159,15 +4159,27 @@ def _mark_live_setup_consumed(
     state.consumed_live_setups.add(_live_setup_consume_key(pair, strategy_mode, setup))
 
 
+def _setup_live_signal_time(setup_ts: pd.Timestamp, *, align_minutes: int) -> pd.Timestamp:
+    """Left-labeled bar timestamp → earliest evaluation time (bar close)."""
+    return pd.Timestamp(setup_ts) + pd.Timedelta(minutes=align_minutes)
+
+
 def _setup_in_live_period(
     setup: SetupUnion,
     bar_timestamp: pd.Timestamp,
     *,
     align_minutes: int,
 ) -> bool:
+    """Whether bar_timestamp falls in the live execution window for this setup.
+
+  Left-labeled setups (M15 etc.) fire when the bar closes at setup_ts + align_minutes.
+  The window stays open through the next align_minutes for fleet / M5 polling delay.
+    """
     setup_ts = pd.Timestamp(setup.timestamp)
-    period_end = setup_ts + pd.Timedelta(minutes=align_minutes)
-    return setup_ts <= pd.Timestamp(bar_timestamp) < period_end
+    signal_time = _setup_live_signal_time(setup_ts, align_minutes=align_minutes)
+    grace_end = signal_time + pd.Timedelta(minutes=align_minutes)
+    bar_ts = pd.Timestamp(bar_timestamp)
+    return signal_time <= bar_ts < grace_end
 
 
 def _find_active_setup(
@@ -4182,8 +4194,8 @@ def _find_active_setup(
 ) -> SetupUnion | None:
     """指定ペア・バー時刻のセットアップを返す。
 
-    完全一致を優先。ライブでは fleet 遅延で境界バーを取り逃すため、
-    同一足内（M15 なら 15 分）の遅延照合も許容する。
+    完全一致を優先。ライブでは M15 等の左ラベル足は **setup_ts + align 分（足確定）** から
+    さらに align 分の猶予内で照合（fleet 遅延・M5 ポーリング用）。
     period_match_enabled=False または align_minutes=0 で完全一致のみ（テスト用）。
     """
     bar_timestamp = pd.Timestamp(bar_timestamp)
@@ -4194,15 +4206,16 @@ def _find_active_setup(
         return _live_setup_consume_key(pair, strategy_mode, setup) in consumed
 
     for setup in setups:
-        if setup.pair == pair and setup.timestamp == bar_timestamp and not _is_consumed(setup):
-            return setup
-
-    if not period_match_enabled or align_minutes <= 0:
-        return None
-
-    for setup in setups:
         if setup.pair != pair or _is_consumed(setup):
             continue
+        setup_ts = pd.Timestamp(setup.timestamp)
+        if setup_ts == bar_timestamp:
+            return setup
+        if not period_match_enabled or align_minutes <= 0:
+            continue
+        signal_time = _setup_live_signal_time(setup_ts, align_minutes=align_minutes)
+        if signal_time == bar_timestamp:
+            return setup
         if _setup_in_live_period(setup, bar_timestamp, align_minutes=align_minutes):
             return setup
     return None

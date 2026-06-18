@@ -6,6 +6,7 @@ import json
 import logging
 import os
 import sqlite3
+import threading
 import time
 from pathlib import Path
 from typing import Any
@@ -21,6 +22,39 @@ logger = logging.getLogger("portfolioos.import_daemon")
 HEARTBEAT_INTERVAL_SEC = int(os.environ.get("DAEMON_HEARTBEAT_SEC", "60"))
 DB_RETRY_ATTEMPTS = int(os.environ.get("DAEMON_DB_RETRY_ATTEMPTS", "5"))
 DB_RETRY_DELAY_SEC = float(os.environ.get("DAEMON_DB_RETRY_DELAY_SEC", "1.0"))
+
+
+DB_RETRY_DELAY_SEC = float(os.environ.get("DAEMON_DB_RETRY_DELAY_SEC", "1.0"))
+
+
+def run_with_sqlite_retry(
+    operation,
+    *,
+    attempts: int | None = None,
+    delay_sec: float | None = None,
+    logger: logging.Logger | None = None,
+):
+    """Retry SQLite operations when portfolio_os.db is contended (dashboard, imports)."""
+    max_attempts = DB_RETRY_ATTEMPTS if attempts is None else attempts
+    delay = DB_RETRY_DELAY_SEC if delay_sec is None else delay_sec
+    last_error: sqlite3.OperationalError | None = None
+    for attempt in range(max_attempts):
+        try:
+            return operation()
+        except sqlite3.OperationalError as exc:
+            last_error = exc
+            if "locked" not in str(exc).lower():
+                raise
+            if logger is not None:
+                logger.warning(
+                    "Database locked (attempt %d/%d)",
+                    attempt + 1,
+                    max_attempts,
+                )
+            time.sleep(delay * (attempt + 1))
+    if last_error is not None:
+        raise last_error
+    return None
 
 
 def sha256_file(path: Path, *, chunk_size: int = 1024 * 1024) -> str:
@@ -50,6 +84,7 @@ class ImportDaemonService:
         self._last_heartbeat = 0.0
         self._total_files = 0
         self._total_trades = 0
+        self._cycle_lock = threading.Lock()
 
     def close(self) -> None:
         if self._owns_repo:
@@ -96,7 +131,12 @@ class ImportDaemonService:
                 last_error = exc
                 if "locked" not in str(exc).lower():
                     raise
-                logger.warning("Database locked importing %s (attempt %d/%d)", path.name, attempt + 1, DB_RETRY_ATTEMPTS)
+                logger.warning(
+                    "Database locked importing %s (attempt %d/%d)",
+                    path.name,
+                    attempt + 1,
+                    DB_RETRY_ATTEMPTS,
+                )
                 time.sleep(DB_RETRY_DELAY_SEC * (attempt + 1))
             except (OSError, json.JSONDecodeError) as exc:
                 last_error = exc
@@ -122,7 +162,10 @@ class ImportDaemonService:
             return
         try:
             file_hash = sha256_file(path)
-            self.daemon_repo.register_imported_file(file_hash, path.name)
+            run_with_sqlite_retry(
+                lambda: self.daemon_repo.register_imported_file(file_hash, path.name),
+                logger=logger,
+            )
         except OSError as exc:
             logger.warning("Could not register hash for %s: %s", path.name, exc)
 
@@ -189,15 +232,22 @@ class ImportDaemonService:
         if summary and summary.get("errors"):
             last_error = summary.get("error") or "import_errors"
         try:
-            self.daemon_repo.update_heartbeat(
-                processed_files=self._total_files,
-                processed_trades=self._total_trades,
-                last_error=last_error if last_error else "",
+            run_with_sqlite_retry(
+                lambda: self.daemon_repo.update_heartbeat(
+                    processed_files=self._total_files,
+                    processed_trades=self._total_trades,
+                    last_error=last_error if last_error else "",
+                ),
+                logger=logger,
             )
         except sqlite3.OperationalError as exc:
-            logger.error("Heartbeat update failed: %s", exc)
+            logger.error("Heartbeat update failed after retries: %s", exc)
 
     def run_import_cycle(self) -> dict[str, Any]:
+        with self._cycle_lock:
+            return self._run_import_cycle_locked()
+
+    def _run_import_cycle_locked(self) -> dict[str, Any]:
         summary = self.import_new_files()
         imported = int(summary.get("imported", 0))
         duplicates = int(summary.get("duplicates", 0))

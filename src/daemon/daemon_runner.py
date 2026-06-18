@@ -12,7 +12,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from src.daemon.daemon_logging import setup_daemon_logging
-from src.daemon.import_daemon import ImportDaemonService, HEARTBEAT_INTERVAL_SEC
+from src.daemon.import_daemon import ImportDaemonService, run_with_sqlite_retry
 from src.daemon.watchdog_service import WatchdogService
 from src.runtime.logging_config import load_dropbox_logging_config
 
@@ -44,7 +44,10 @@ def run_forever(*, use_watchdog: bool | None = None) -> int:
 
     try:
         logger.info("Import daemon starting — watch=%s poll=%ss", service.watch_dir, poll_sec)
-        service.daemon_repo.update_heartbeat(last_error="")
+        run_with_sqlite_retry(
+            lambda: service.daemon_repo.update_heartbeat(last_error=""),
+            logger=logger,
+        )
         service.maybe_update_heartbeat(force=True)
 
         if enable_watchdog:
@@ -56,21 +59,18 @@ def run_forever(*, use_watchdog: bool | None = None) -> int:
         if hasattr(signal, "SIGBREAK"):
             signal.signal(signal.SIGBREAK, _handle_stop)
 
-        last_heartbeat = 0.0
         while _running:
             try:
                 service.run_import_cycle()
             except Exception as exc:
                 logger.exception("Import cycle error: %s", exc)
                 try:
-                    service.daemon_repo.update_heartbeat(last_error=str(exc)[:500])
+                    run_with_sqlite_retry(
+                        lambda: service.daemon_repo.update_heartbeat(last_error=str(exc)[:500]),
+                        logger=logger,
+                    )
                 except Exception:
                     logger.exception("Failed to record heartbeat error")
-
-            now = time.time()
-            if now - last_heartbeat >= HEARTBEAT_INTERVAL_SEC:
-                service.maybe_update_heartbeat(force=True)
-                last_heartbeat = now
 
             time.sleep(poll_sec)
 
