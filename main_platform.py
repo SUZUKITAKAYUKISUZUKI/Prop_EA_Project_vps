@@ -3992,7 +3992,7 @@ def sync_broker_open_positions(
 
     各 item は setup_type または strategy_letter (A/B/C) を含むこと。
     不明な場合のみ BROKER_POSITION（当該シンボル全戦略ブロック）として扱う。
-    同一戦略×シンボルに2件以上ある場合のみ BROKER_POSITION へ昇格。
+    同一戦略×シンボルに2件以上ある場合は先頭1件のみ登録（当該戦略のみブロック）。
     """
     from strategies import SETUP_TYPE_BY_STRATEGY_LETTER
 
@@ -4002,9 +4002,11 @@ def sync_broker_open_positions(
     if broker_positions is None:
         return
     if not broker_positions:
-        if any(pos.provisional for pos in account.open_positions):
-            return
-        account.open_positions.clear()
+        account.open_positions = [
+            pos
+            for pos in account.open_positions
+            if pos.provisional and pd.Timestamp(pos.close_ts) > pd.Timestamp(ts)
+        ]
         return
 
     parsed: list[tuple[str, str, pd.Timestamp]] = []
@@ -4029,20 +4031,18 @@ def sync_broker_open_positions(
         parsed.append((pair, setup_type, entry))
 
     if not parsed:
-        if any(pos.provisional for pos in account.open_positions):
-            return
-        account.open_positions = [pos for pos in account.open_positions if pos.provisional]
+        account.open_positions = [
+            pos
+            for pos in account.open_positions
+            if pos.provisional and pd.Timestamp(pos.close_ts) > pd.Timestamp(ts)
+        ]
         return
-
-    pair_setup_counts = Counter((pair, setup_type) for pair, setup_type, _ in parsed)
 
     synced: list[audit_rm.OpenPosition] = []
     seen: set[tuple[str, str]] = set()
     broker_keys: set[tuple[str, str]] = set()
     for pair, setup_type, entry in parsed:
         effective_setup = setup_type
-        if pair_setup_counts[(pair, setup_type)] >= 2:
-            effective_setup = BROKER_POSITION_SETUP_TYPE
         dedupe_key = (pair, effective_setup)
         if dedupe_key in seen:
             continue
@@ -4712,13 +4712,17 @@ def _evaluate_trade_signal_with_pending_locked(
 
     signal = pending_to_trade_signal(pending)
     signal = apply_pet_to_trade_signal(signal, pet_decision)
-    _mark_live_setup_consumed(
-        state,
-        pair,
-        resolve_strategy_mode(matched_strategy),
-        active,
-        bar_timestamp=bar_timestamp,
-    )
+    if (
+        signal.get("action") in ("BUY", "SELL")
+        and not pending.is_reject
+    ):
+        _mark_live_setup_consumed(
+            state,
+            pair,
+            resolve_strategy_mode(matched_strategy),
+            active,
+            bar_timestamp=bar_timestamp,
+        )
     if signal.get("action") in ("BUY", "SELL"):
         _register_live_execution_lock_if_approved(
             state.account, server_timestamp, pending, signal

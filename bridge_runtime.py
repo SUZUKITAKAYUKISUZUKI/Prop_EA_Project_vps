@@ -155,4 +155,7 @@ def get_runtime_status() -> dict[str, str]:
     from live_pyramid.l6_log import live_pyramid_log_path
 
     status["live_pyramid_log"] = str(live_pyramid_log_path())
+    import socket
+
+    status["bridge_host"] = socket.gethostname()
     return status
