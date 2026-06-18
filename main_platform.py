@@ -3711,6 +3711,7 @@ BROKER_POSITION_SETUP_TYPE = "BROKER_POSITION"
 BROKER_POSITION_HORIZON = pd.Timedelta(days=365)
 LIVE_SIGNAL_LOCK_MINUTES = int(os.getenv("LIVE_SIGNAL_LOCK_MINUTES", "15"))
 LIVE_EXEC_BAR_MINUTES = 5  # PropEA_Bridge.mq5 uses PERIOD_M5
+LIVE_SETUP_MATCH_VERSION = "signal_v2"  # MT5 HOLD diag — deploy verification
 _LIVE_BAR_COLUMNS = ("datetime", "open", "high", "low", "close", "volume")
 _live_pair_eval_locks: dict[str, threading.Lock] = {}
 _live_pair_eval_lock_guard = threading.Lock()
@@ -4209,14 +4210,14 @@ def _find_active_setup(
         if setup.pair != pair or _is_consumed(setup):
             continue
         setup_ts = pd.Timestamp(setup.timestamp)
-        if setup_ts == bar_timestamp:
-            return setup
         if not period_match_enabled or align_minutes <= 0:
+            if setup_ts == bar_timestamp:
+                return setup
             continue
         signal_time = _setup_live_signal_time(setup_ts, align_minutes=align_minutes)
-        if signal_time == bar_timestamp:
-            return setup
-        if _setup_in_live_period(setup, bar_timestamp, align_minutes=align_minutes):
+        if signal_time == bar_timestamp or _setup_in_live_period(
+            setup, bar_timestamp, align_minutes=align_minutes
+        ):
             return setup
     return None
 
@@ -4242,14 +4243,24 @@ def _live_setup_diagnostic_summary(
         setups = setup_cache[cache_key]
         on_pair = [s for s in setups if s.pair == pair]
         exact = [s for s in on_pair if s.timestamp == bar_timestamp]
-        period = [
+        in_window = [
             s
             for s in on_pair
             if _setup_in_live_period(s, bar_timestamp, align_minutes=align)
-            and _live_setup_consume_key(pair, mode, s) not in state.consumed_live_setups
         ]
-        parts.append(f"{mode}:t{len(on_pair)}e{len(exact)}p{len(period)}")
-    return " ".join(parts)
+        period = [
+            s
+            for s in in_window
+            if _live_setup_consume_key(pair, mode, s) not in state.consumed_live_setups
+        ]
+        consumed_w = len(in_window) - len(period)
+        latest = "-"
+        if on_pair:
+            latest = pd.Timestamp(max(s.timestamp for s in on_pair)).strftime("%m%d%H%M")
+        parts.append(
+            f"{mode}:t{len(on_pair)}e{len(exact)}p{len(period)}w{len(in_window)}c{consumed_w}l{latest}"
+        )
+    return f"{LIVE_SETUP_MATCH_VERSION} " + " ".join(parts)
 
 
 def evaluate_precomputed_setup(
