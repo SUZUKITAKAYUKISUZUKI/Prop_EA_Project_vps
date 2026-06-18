@@ -3872,6 +3872,7 @@ class LivePipelineState:
     gbp_df: pd.DataFrame
     eur_df: pd.DataFrame
     pair_bars: dict[str, pd.DataFrame]
+    consumed_live_setups: set[tuple[str, str, pd.Timestamp]]
     tref_bayes: Any = None
     sentinel: Any = None  # LiveSentinelState — lazy import avoided in dataclass field
     pet: Any = None  # PetRuntimeState
@@ -3892,6 +3893,7 @@ class LivePipelineState:
             gbp_df=pair_bars["GBPUSD"].copy(),
             eur_df=pair_bars["EURUSD"].copy(),
             pair_bars=pair_bars,
+            consumed_live_setups=set(),
             sentinel=LiveSentinelState.create(),
             pet=PetRuntimeState.create(RM_STARTING_EQUITY),
             last_pet_decision=None,
@@ -4106,12 +4108,66 @@ def _detect_setups_for_live_strategy(
     return gbp_setups, eur_setups, gbp_df, eur_df, h1_gbp, h1_eur
 
 
-def _live_m15_match_grace_sec() -> float:
-    raw = os.environ.get("LIVE_M15_MATCH_GRACE_SEC", "540")
-    try:
-        return max(0.0, float(raw))
-    except ValueError:
-        return 540.0
+def _strategy_live_align_minutes(strategy: BaseStrategy) -> int:
+    """Live bar polling と setup タイムスタンプの足幅（分）。"""
+    from strategies.dbbs import DbbsStrategy
+    from strategies.dinapoli import DiNapoliStrategy
+    from strategies.london_sweep_failure import LondonSweepFailureStrategy
+    from strategies.smrs import SmrsStrategy
+    from strategies.vamr import VamrStrategy
+
+    if isinstance(strategy, SmrsStrategy):
+        return 1
+    if isinstance(strategy, (DbbsStrategy, LondonSweepFailureStrategy, DiNapoliStrategy)):
+        return 15
+    if isinstance(strategy, VamrStrategy):
+        return 5
+    return 15
+
+
+def _live_setup_consume_key(
+    pair: str,
+    strategy_mode: str,
+    setup: SetupUnion,
+) -> tuple[str, str, pd.Timestamp]:
+    return pair, strategy_mode, pd.Timestamp(setup.timestamp)
+
+
+def _prune_consumed_live_setups(
+    consumed: set[tuple[str, str, pd.Timestamp]],
+    *,
+    before: pd.Timestamp,
+) -> None:
+    cutoff = pd.Timestamp(before)
+    stale = [key for key in consumed if key[2] < cutoff]
+    for key in stale:
+        consumed.discard(key)
+
+
+def _mark_live_setup_consumed(
+    state: LivePipelineState,
+    pair: str,
+    strategy_mode: str,
+    setup: SetupUnion,
+    *,
+    bar_timestamp: pd.Timestamp,
+) -> None:
+    _prune_consumed_live_setups(
+        state.consumed_live_setups,
+        before=pd.Timestamp(bar_timestamp) - pd.Timedelta(hours=24),
+    )
+    state.consumed_live_setups.add(_live_setup_consume_key(pair, strategy_mode, setup))
+
+
+def _setup_in_live_period(
+    setup: SetupUnion,
+    bar_timestamp: pd.Timestamp,
+    *,
+    align_minutes: int,
+) -> bool:
+    setup_ts = pd.Timestamp(setup.timestamp)
+    period_end = setup_ts + pd.Timedelta(minutes=align_minutes)
+    return setup_ts <= pd.Timestamp(bar_timestamp) < period_end
 
 
 def _find_active_setup(
@@ -4119,33 +4175,35 @@ def _find_active_setup(
     pair: str,
     bar_timestamp: pd.Timestamp,
     *,
-    m15_grace_sec: float | None = None,
+    align_minutes: int = 15,
+    consumed: set[tuple[str, str, pd.Timestamp]] | None = None,
+    strategy_mode: str = "",
+    period_match_enabled: bool = True,
 ) -> SetupUnion | None:
     """指定ペア・バー時刻のセットアップを返す。
 
-    完全一致を優先。ライブでは fleet 遅延で M15 境界バーを取り逃すことがあるため、
-    同一 M15 足内の遅延照合（grace）も許容する（LIVE_M15_MATCH_GRACE_SEC、既定 540s）。
-    grace=0 で完全一致のみ（テスト用）。
+    完全一致を優先。ライブでは fleet 遅延で境界バーを取り逃すため、
+    同一足内（M15 なら 15 分）の遅延照合も許容する。
+    period_match_enabled=False または align_minutes=0 で完全一致のみ（テスト用）。
     """
     bar_timestamp = pd.Timestamp(bar_timestamp)
-    exact = [
-        s
-        for s in setups
-        if s.pair == pair and s.timestamp == bar_timestamp
-    ]
-    if exact:
-        return exact[0]
 
-    grace = _live_m15_match_grace_sec() if m15_grace_sec is None else max(0.0, m15_grace_sec)
-    if grace <= 0:
+    def _is_consumed(setup: SetupUnion) -> bool:
+        if consumed is None or not strategy_mode:
+            return False
+        return _live_setup_consume_key(pair, strategy_mode, setup) in consumed
+
+    for setup in setups:
+        if setup.pair == pair and setup.timestamp == bar_timestamp and not _is_consumed(setup):
+            return setup
+
+    if not period_match_enabled or align_minutes <= 0:
         return None
 
-    m15_floor = bar_timestamp.floor("15min")
     for setup in setups:
-        if setup.pair != pair or setup.timestamp != m15_floor:
+        if setup.pair != pair or _is_consumed(setup):
             continue
-        delta_sec = (bar_timestamp - setup.timestamp).total_seconds()
-        if 0 <= delta_sec <= grace:
+        if _setup_in_live_period(setup, bar_timestamp, align_minutes=align_minutes):
             return setup
     return None
 
@@ -4158,31 +4216,27 @@ def _live_setup_diagnostic_summary(
     state: LivePipelineState,
     setup_cache: dict[tuple[str, str], list[SetupUnion]],
 ) -> str:
-    """Optional HOLD diagnostics — set LIVE_SETUP_DIAG=1 on the bridge host."""
+    """HOLD 時のコンパクト診断（常時 MT5 ログへ出力）。"""
     from strategies import resolve_strategy_mode
 
     parts: list[str] = []
-    m15_floor = pd.Timestamp(bar_timestamp).floor("15min")
-    grace = _live_m15_match_grace_sec()
     for strategy in live_strategies:
         mode = resolve_strategy_mode(strategy)
+        align = _strategy_live_align_minutes(strategy)
         cache_key = (pair, mode)
         if cache_key not in setup_cache:
             setup_cache[cache_key] = _detect_setups_for_live_pair(strategy, state, pair)
         setups = setup_cache[cache_key]
         on_pair = [s for s in setups if s.pair == pair]
         exact = [s for s in on_pair if s.timestamp == bar_timestamp]
-        m15 = [s for s in on_pair if s.timestamp == m15_floor]
-        grace_hits = [
+        period = [
             s
             for s in on_pair
-            if s.timestamp == m15_floor
-            and 0 <= (bar_timestamp - s.timestamp).total_seconds() <= grace
+            if _setup_in_live_period(s, bar_timestamp, align_minutes=align)
+            and _live_setup_consume_key(pair, mode, s) not in state.consumed_live_setups
         ]
-        parts.append(
-            f"{mode}:total={len(on_pair)} exact={len(exact)} m15={len(m15)} grace={len(grace_hits)}"
-        )
-    return "; ".join(parts)
+        parts.append(f"{mode}:t{len(on_pair)}e{len(exact)}p{len(period)}")
+    return " ".join(parts)
 
 
 def evaluate_precomputed_setup(
@@ -4564,23 +4618,23 @@ def _evaluate_trade_signal_with_pending_locked(
         if cache_key not in live_setup_cache:
             live_setup_cache[cache_key] = _detect_setups_for_live_pair(strategy, state, pair)
         setups = live_setup_cache[cache_key]
-        active = _find_active_setup(setups, pair, bar_timestamp)
+        active = _find_active_setup(
+            setups,
+            pair,
+            bar_timestamp,
+            align_minutes=_strategy_live_align_minutes(strategy),
+            consumed=state.consumed_live_setups,
+            strategy_mode=mode,
+        )
         if active is not None:
             matched_strategy = strategy
             break
     if active is None or matched_strategy is None:
-        hold_message = "No active setup at this bar"
-        if os.environ.get("LIVE_SETUP_DIAG", "").strip().lower() in {"1", "true", "yes"}:
-            hold_message += (
-                " | diag: "
-                + _live_setup_diagnostic_summary(
-                    pair=pair,
-                    bar_timestamp=bar_timestamp,
-                    live_strategies=live_strategies,
-                    state=state,
-                    setup_cache=live_setup_cache,
-                )
-            )
+        pair_buf = state.pair_bars.get(pair, _empty_live_bars())
+        hold_message = (
+            f"No active setup at this bar | bar={bar_timestamp} buf={len(pair_buf)} | "
+            f"diag: {_live_setup_diagnostic_summary(pair=pair, bar_timestamp=bar_timestamp, live_strategies=live_strategies, state=state, setup_cache=live_setup_cache)}"
+        )
         return (
             {
                 "action": "HOLD",
@@ -4658,6 +4712,13 @@ def _evaluate_trade_signal_with_pending_locked(
 
     signal = pending_to_trade_signal(pending)
     signal = apply_pet_to_trade_signal(signal, pet_decision)
+    _mark_live_setup_consumed(
+        state,
+        pair,
+        resolve_strategy_mode(matched_strategy),
+        active,
+        bar_timestamp=bar_timestamp,
+    )
     if signal.get("action") in ("BUY", "SELL"):
         _register_live_execution_lock_if_approved(
             state.account, server_timestamp, pending, signal
