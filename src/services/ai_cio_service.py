@@ -69,3 +69,31 @@ class AiCioService:
             persist=True,
             use_cache=False,
         )
+
+    def record_actual_outcome(
+        self,
+        *,
+        actual_outcome: dict[str, Any],
+        profile_id: str | None = None,
+        report_id: int | None = None,
+        **kwargs: Any,
+    ) -> dict[str, Any]:
+        if report_id is not None:
+            ok = self._engine._repo.update_actual_outcome(
+                report_id=report_id,
+                actual_outcome=actual_outcome,
+            )
+            resolved_id = report_id if ok else None
+        else:
+            pid = profile_id
+            if not pid:
+                _, _, pid = self._load_reports(**kwargs)
+            resolved_id = self._engine._repo.record_actual_outcome_for_latest(
+                profile_id=str(pid),
+                actual_outcome=actual_outcome,
+            )
+        return {
+            "ok": resolved_id is not None,
+            "report_id": resolved_id,
+            "actual_outcome": actual_outcome,
+        }

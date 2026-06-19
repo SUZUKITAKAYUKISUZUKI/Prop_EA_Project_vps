@@ -9,6 +9,7 @@ from typing import Any
 
 from src.importers.dropbox_cleanup import cleanup_after_import
 from src.repositories.trade_event_repository import TradeEventRepository
+from src.runtime.dropbox_paths import resolve_watch_dir
 from src.runtime.logging_config import DropboxLoggingConfig, load_dropbox_logging_config
 
 logger = logging.getLogger(__name__)
@@ -44,12 +45,26 @@ class DropboxEventImporter:
         self.config = config or load_dropbox_logging_config()
         self.repo = repo or TradeEventRepository()
 
-    def discover_files(self) -> list[Path]:
-        watch = self.config.watch_dir
-        if not watch.exists():
-            return []
-        files = sorted(watch.glob("events_*.jsonl"))
-        files.extend(sorted(watch.glob("events_*.jsonl.gz")))
+    def discover_files(self, *extra_dirs: Path) -> list[Path]:
+        dirs = [resolve_watch_dir(self.config)]
+        for path in extra_dirs:
+            if path not in dirs:
+                dirs.append(path)
+        files: list[Path] = []
+        seen: set[str] = set()
+        for watch in dirs:
+            if not watch.exists():
+                continue
+            for path in sorted(watch.glob("events_*.jsonl")):
+                key = path.name.lower()
+                if key not in seen:
+                    seen.add(key)
+                    files.append(path)
+            for path in sorted(watch.glob("events_*.jsonl.gz")):
+                key = path.name.lower()
+                if key not in seen:
+                    seen.add(key)
+                    files.append(path)
         return files
 
     def import_file(self, path: Path) -> dict[str, Any]:
@@ -154,7 +169,7 @@ class DropboxEventImporter:
             "cleanup": cleanup,
         }
 
-    def import_all(self) -> dict[str, Any]:
+    def import_all(self, *extra_dirs: Path) -> dict[str, Any]:
         summary: dict[str, Any] = {
             "files": 0,
             "parsed": 0,
@@ -162,7 +177,7 @@ class DropboxEventImporter:
             "duplicates": 0,
             "file_results": {},
         }
-        for path in self.discover_files():
+        for path in self.discover_files(*extra_dirs):
             result = self.import_file(path)
             summary["files"] += 1
             summary["parsed"] += result["parsed"]

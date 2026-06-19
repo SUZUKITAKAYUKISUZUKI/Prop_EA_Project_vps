@@ -7,6 +7,7 @@ import time
 from typing import Callable
 
 from src.importers.dropbox_event_importer import DropboxEventImporter
+from src.importers.vps_event_pull import staging_dir
 from src.runtime.logging_config import DropboxLoggingConfig, load_dropbox_logging_config, require_consumer
 
 logger = logging.getLogger(__name__)
@@ -27,7 +28,7 @@ class DropboxImportDaemon:
         self._running = False
 
     def run_once(self) -> dict:
-        summary = self.importer.import_all()
+        summary = self.importer.import_all(staging_dir())
         if summary["imported"]:
             logger.info(
                 "Imported %d events (%d duplicates skipped) from %d files",

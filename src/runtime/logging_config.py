@@ -208,7 +208,7 @@ def load_dropbox_logging_config(path: Path | None = None) -> DropboxLoggingConfi
 
     )
 
-    return DropboxLoggingConfig(
+    config = DropboxLoggingConfig(
 
         enabled=bool(raw.get("enabled", True)),
 
@@ -235,6 +235,28 @@ def load_dropbox_logging_config(path: Path | None = None) -> DropboxLoggingConfi
         producer=producer,
 
     )
+
+    if config.data_flow.is_consumer:
+        from src.runtime.dropbox_paths import resolve_watch_dir
+
+        resolved = resolve_watch_dir(config)
+        if resolved != config.watch_dir:
+            config = DropboxLoggingConfig(
+                enabled=config.enabled,
+                output_dir=resolved,
+                watch_dir=resolved,
+                rotation=config.rotation,
+                compress_old_files=config.compress_old_files,
+                filename_pattern=config.filename_pattern,
+                poll_interval_seconds=config.poll_interval_seconds,
+                batch_size=config.batch_size,
+                dedupe=config.dedupe,
+                data_flow=config.data_flow,
+                cleanup=config.cleanup,
+                producer=config.producer,
+            )
+
+    return config
 
 
 

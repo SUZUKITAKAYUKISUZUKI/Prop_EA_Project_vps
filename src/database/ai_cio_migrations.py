@@ -3,9 +3,9 @@ from __future__ import annotations
 
 import sqlite3
 
-from src.database.schema_migrations import _set_schema_meta, _table_exists
+from src.database.schema_migrations import _add_column, _set_schema_meta, _table_exists
 
-AI_CIO_SCHEMA_VERSION = "1.0.0"
+AI_CIO_SCHEMA_VERSION = "1.1.0"
 
 AI_CIO_DDL = """
 CREATE TABLE IF NOT EXISTS cio_reports (
@@ -14,6 +14,8 @@ CREATE TABLE IF NOT EXISTS cio_reports (
     profile_id TEXT NOT NULL,
     cio_score REAL,
     cio_opinion TEXT,
+    cio_score_components_json TEXT,
+    actual_outcome_json TEXT,
     payload_json TEXT
 );
 
@@ -52,4 +54,7 @@ CREATE INDEX IF NOT EXISTS idx_cio_opinions_profile
 def apply_ai_cio_migrations(conn: sqlite3.Connection) -> None:
     if not _table_exists(conn, "cio_reports"):
         conn.executescript(AI_CIO_DDL)
+    else:
+        _add_column(conn, "cio_reports", "cio_score_components_json TEXT")
+        _add_column(conn, "cio_reports", "actual_outcome_json TEXT")
     _set_schema_meta(conn, "ai_cio_schema_version", AI_CIO_SCHEMA_VERSION)

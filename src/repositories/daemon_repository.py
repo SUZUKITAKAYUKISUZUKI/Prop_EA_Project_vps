@@ -36,9 +36,48 @@ class DaemonRepository:
         return row is not None
 
     def register_imported_file(self, file_hash: str, filename: str) -> None:
+        self._ensure_imported_files_schema()
+        existing = self._db.query(
+            "SELECT file_hash FROM imported_files WHERE file_hash=?",
+            (file_hash,),
+            one=True,
+        )
+        if existing:
+            self._db.portfolio.execute(
+                "UPDATE imported_files SET filename=?, imported_at=? WHERE file_hash=?",
+                (filename, utc_now_iso(), file_hash),
+            )
+        else:
+            self._db.portfolio.execute(
+                "INSERT INTO imported_files (file_hash, filename, imported_at, storage_deleted_at) "
+                "VALUES (?, ?, ?, NULL)",
+                (file_hash, filename, utc_now_iso()),
+            )
+        self._db.portfolio.commit()
+
+    def _ensure_imported_files_schema(self) -> None:
+        rows = self._db.query("PRAGMA table_info(imported_files)", ())
+        columns = {str(row["name"]) for row in rows}
+        if "storage_deleted_at" not in columns:
+            self._db.portfolio.execute(
+                "ALTER TABLE imported_files ADD COLUMN storage_deleted_at TEXT"
+            )
+            self._db.portfolio.commit()
+
+    def is_storage_deleted(self, file_hash: str) -> bool:
+        self._ensure_imported_files_schema()
+        row = self._db.query(
+            "SELECT storage_deleted_at FROM imported_files WHERE file_hash=?",
+            (file_hash,),
+            one=True,
+        )
+        return bool(row and row["storage_deleted_at"])
+
+    def mark_storage_deleted(self, file_hash: str) -> None:
+        self._ensure_imported_files_schema()
         self._db.portfolio.execute(
-            "INSERT OR REPLACE INTO imported_files (file_hash, filename, imported_at) VALUES (?, ?, ?)",
-            (file_hash, filename, utc_now_iso()),
+            "UPDATE imported_files SET storage_deleted_at=? WHERE file_hash=?",
+            (utc_now_iso(), file_hash),
         )
         self._db.portfolio.commit()
 

@@ -14,6 +14,7 @@ if str(PROJECT_ROOT) not in sys.path:
 from src.daemon.daemon_logging import setup_daemon_logging
 from src.daemon.import_daemon import ImportDaemonService, run_with_sqlite_retry
 from src.daemon.watchdog_service import WatchdogService
+from src.runtime.daemon_env import load_daemon_env
 from src.runtime.logging_config import load_dropbox_logging_config
 
 _running = True
@@ -26,6 +27,7 @@ def _handle_stop(*_args) -> None:
 
 def run_forever(*, use_watchdog: bool | None = None) -> int:
     global _running
+    load_daemon_env()
     logger, _, _ = setup_daemon_logging()
     config = load_dropbox_logging_config()
     poll_sec = max(1, int(config.poll_interval_seconds))

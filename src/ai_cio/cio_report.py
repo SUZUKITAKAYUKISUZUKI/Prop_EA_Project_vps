@@ -31,5 +31,7 @@ class CioReport:
             "recommendations": recommendations.get("recommendations"),
             "recommended_actions": recommendations.get("recommended_actions"),
             "top_recommendation": recommendations.get("top_recommendation"),
+            "cio_score_components": executive.get("cio_score_components"),
+            "actual_outcome": None,
             "advisor_notice": "Human approval remains mandatory. AI CIO does not execute trades or modify allocations.",
         }
